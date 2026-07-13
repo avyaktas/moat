@@ -7,7 +7,9 @@ from database import get_db
 from main import app
 from models import Base, Company
 
-TEST_DATABASE_URL = "postgresql+psycopg://avyaktasharma@localhost:5432/moat_test"
+from config import settings
+
+TEST_DATABASE_URL = settings.test_database_url
 
 engine = create_engine(TEST_DATABASE_URL)
 TestingSessionLocal = sessionmaker(bind=engine)
