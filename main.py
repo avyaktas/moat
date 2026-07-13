@@ -1,7 +1,6 @@
 # owns endpoints
 
 from fastapi import FastAPI, Depends, HTTPException
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 from models import Company
 from database import get_db
@@ -18,7 +17,7 @@ def read_health():
 
 @app.get("/companies")
 def list_companies(db: Session = Depends(get_db)):
-    rows = db.execute(text("SELECT id, ticker, name, sector FROM companies")).all()
+    rows = db.query(Company).all
     return [
         {"id": r.id, "ticker": r.ticker, "name": r.name, "sector": r.sector}
         for r in rows
