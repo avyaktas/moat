@@ -44,13 +44,17 @@ HEADERS = {"User-Agent": "Avyakta Sharma avyaktansharma@gmail.com"}
 
 # metric we are looking for
 TAGS = {
-    "revenue": "RevenueFromContractWithCustomerExcludingAssessedTax",
-    "net_income": "NetIncomeLoss",
-    "operating_cash_flow": "NetCashProvidedByUsedInOperatingActivities",
-    "capex": "PaymentsToAcquirePropertyPlantAndEquipment",
-    "equity": "StockholdersEquity",
-    "debt_current": "LongTermDebtCurrent",
-    "debt_noncurrent": "LongTermDebtNoncurrent",
+    "revenue": [
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        "Revenues",
+        "SalesRevenueNet",
+    ],
+    "net_income":[ "NetIncomeLoss"],
+    "operating_cash_flow": ["NetCashProvidedByUsedInOperatingActivities"],
+    "capex": ["PaymentsToAcquirePropertyPlantAndEquipment"],
+    "equity": ["StockholdersEquity"],
+    "debt_current": ["LongTermDebtCurrent"],
+    "debt_noncurrent": ["LongTermDebtNoncurrent"],
 }
 
 def fetch_company_facts(cik: str) -> dict:
@@ -60,18 +64,18 @@ def fetch_company_facts(cik: str) -> dict:
     return response.json()
 
 # REPL discovery
-def extract_quarterly(facts: dict, tag: str) -> dict[date, float]:
-    """Return {period_end: value} for clean quarterly entries of one tag."""
-    try:
-        entries = facts["facts"]["us-gaap"][tag]["units"]["USD"]
-    except KeyError:
-        return {}
+def extract_quarterly(facts: dict, tags: list[str]) -> dict[date, float]:
+    """Return {period_end: value}, trying each candidate tag in order"""
 
     out = {}
-    for e in entries:
-        if "frame" in e and "Q" in e.get("frame", ""):
-            
-            out[date.fromisoformat(e["end"])] = e["val"]
+    for tag in tags:
+        try:
+            entries = facts["facts"]["us-gaap"][tag]["units"]["USD"]
+        except KeyError:
+            continue
+        for e in entries:
+            if "frame" in e and "Q" in e.get("frame", ""):
+                out.setdefault(date.fromisoformat(e["end"]), e["val"])
     return out
 
 def ingest_company(ticker: str, cik: str, name: str, sector: str | None = None) -> int:

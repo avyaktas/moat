@@ -21,3 +21,8 @@ def test_company_lowercase(client):
 def test_get_company_not_found(client):
     response = client.get("/company/FAKE")
     assert response.status_code == 404
+
+def test_get_financials_empty(client):
+    response = client.get("/company/MSFT/financials")
+    assert response.status_code == 200
+    assert response.json() == []
