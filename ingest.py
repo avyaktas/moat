@@ -43,15 +43,20 @@ from models import Company, Financials
 HEADERS = {"User-Agent": "Avyakta Sharma avyaktansharma@gmail.com"}
 
 # metric we are looking for
-TAGS = {
+
+# split in two se we can get Q4
+FLOW_TAGS = {
     "revenue": [
         "RevenueFromContractWithCustomerExcludingAssessedTax",
         "Revenues",
         "SalesRevenueNet",
     ],
-    "net_income":[ "NetIncomeLoss"],
+    "net_income": ["NetIncomeLoss"],
     "operating_cash_flow": ["NetCashProvidedByUsedInOperatingActivities"],
     "capex": ["PaymentsToAcquirePropertyPlantAndEquipment"],
+}
+
+SNAPSHOT_TAGS = {
     "equity": ["StockholdersEquity"],
     "debt_current": ["LongTermDebtCurrent"],
     "debt_noncurrent": ["LongTermDebtNoncurrent"],
@@ -78,12 +83,56 @@ def extract_quarterly(facts: dict, tags: list[str]) -> dict[date, float]:
                 out.setdefault(date.fromisoformat(e["end"]), e["val"])
     return out
 
+def extract_annual(facts: dict, tags: list[str]) -> dict[date, tuple[date, float]]:
+    """Return {period_end: (period_start, value)} for annual (~365-day) entries.
+
+    Annual figures come from 10-Ks and carry no calendar frame when the
+    fiscal year is off-calendar, so we identify them by duration instead.
+    The 350–380 day window tolerates 52/53-week fiscal calendars.
+    """
+    out = {}
+    for tag in tags:
+        try:
+            entries = facts["facts"]["us-gaap"][tag]["units"]["USD"]
+        except KeyError:
+            continue
+        for e in entries:
+            if e.get("form") != "10-K" or "start" not in e:
+                continue
+            start = date.fromisoformat(e["start"])
+            end = date.fromisoformat(e["end"])
+            if 350 <= (end - start).days <= 380:
+                out.setdefault(end, (start, e["val"]))
+    return out
+
+def derive_q4(quarterly: dict[date, float],
+              annual: dict[date, tuple[date, float]]) -> dict[date, float]:
+    """Fill in missing Q4 values: Q4 = FY - (Q1 + Q2 + Q3).
+
+    Companies don't file a standalone Q4 10-Q; the fourth quarter lives
+    inside the annual 10-K figure. Where we have the full year and exactly
+    three quarters inside it, the fourth is recoverable by subtraction -
+    real filed arithmetic, not an estimate. If any quarter is missing we
+    derive nothing rather than guess.
+    """
+    out = dict(quarterly)
+    for fy_end, (fy_start, fy_val) in annual.items():
+        if fy_end in out:
+            continue
+        covered = [v for p, v in quarterly.items() if fy_start <= p <= fy_end]
+        if len(covered) == 3:
+            out[fy_end] = fy_val - sum(covered)
+    return out
+
 def ingest_company(ticker: str, cik: str, name: str, sector: str | None = None) -> int:
     """Fetch EDGAR data for one company and upsert financials. Returns rows written."""
     facts = fetch_company_facts(cik)
 
-    series = {key: extract_quarterly(facts, tag) for key, tag in TAGS.items()}
-
+    series = {}
+    for key, tags in FLOW_TAGS.items():
+            series[key] = derive_q4(extract_quarterly(facts, tags), extract_annual(facts, tags))
+    for key, tags in SNAPSHOT_TAGS.items():
+        series[key] = extract_quarterly(facts, tags)
     all_periods = set()
     for s in series.values():
         all_periods.update(s.keys())

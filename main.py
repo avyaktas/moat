@@ -4,6 +4,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from models import Company, Financials
 from database import get_db
+from metrics import debt_to_equity, fcf_margin, net_margin, roe
 
 app = FastAPI()
 
@@ -55,3 +56,27 @@ def get_financials(ticker: str, db: Session = Depends(get_db)):
     for r in rows
 ]
 
+@app.get("/company/{ticker}/metrics")
+def get_metrics(ticker: str, db: Session = Depends(get_db)):
+    ticker = ticker.upper()
+    company = db.query(Company).filter(Company.ticker == ticker).first()
+    if company is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    rows = (
+        db.query(Financials)
+        .filter(Financials.company_id == company.id)
+        .order_by(Financials.period_end.desc())
+        .all()
+    )
+
+    return [
+        {
+            "period_end": r.period_end,
+            "net_margin": net_margin(r.revenue, r.net_income),
+            "fcf_margin": fcf_margin(r.revenue, r.free_cash_flow),
+            "roe": roe(r.net_income, r.shareholders_equity),
+            "debt_to_equity": debt_to_equity(r.total_debt, r.shareholders_equity),
+        }
+        for r in rows
+    ]
