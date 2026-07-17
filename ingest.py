@@ -124,8 +124,34 @@ def derive_q4(quarterly: dict[date, float],
             out[fy_end] = fy_val - sum(covered)
     return out
 
-def ingest_company(ticker: str, cik: str, name: str, sector: str | None = None) -> int:
+_ticker_cache: dict[str, tuple[str, str]] | None = None
+
+def get_cik(ticker: str) -> tuple[str, str]:
+    """Look up (CIK, name) for a ticker from the SEC's mapping file.
+    
+    The ~10-K entry file is fetched once per process and cached in memory - 
+    it changes rarely and refetching it every ingest would hammer the SEC.
+    ValueErrors raised for tickers that are not in the file."""
+
+    global _ticker_cache
+    if _ticker_cache is None:
+        resp = requests.get(
+            "https://www.sec.gov/files/company_tickers.json",
+            headers=HEADERS, timeout=30,
+        )
+        resp.raise_for_status()
+        _ticker_cache = {
+            v["ticker"].upper(): (str(v["cik_str"]), v["title"])
+            for v in resp.json().values()
+        }
+    ticker = ticker.upper()
+    if ticker not in _ticker_cache:
+        raise ValueError(f"Unknown ticker: {ticker}")
+    return _ticker_cache[ticker]
+
+def ingest_company(ticker: str, sector: str | None = None) -> int:
     """Fetch EDGAR data for one company and upsert financials. Returns rows written."""
+    cik, name = get_cik(ticker)
     facts = fetch_company_facts(cik)
 
     series = {}
@@ -189,6 +215,8 @@ def ingest_company(ticker: str, cik: str, name: str, sector: str | None = None) 
 
 
 if __name__ == "__main__":
-    count = ingest_company("MSFT", "789019", "Microsoft", "Technology")
-    print(f"Wrote {count} new financials rows for MSFT")
+    import sys
+    ticker = sys.argv[1] if len(sys.argv) > 1 else "MSFT"
+    count = ingest_company(ticker)
+    print(f"Wrote {count} new financials rows for {ticker}")
 
