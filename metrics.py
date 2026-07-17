@@ -35,5 +35,27 @@ def debt_to_equity(total_debt: float | None, shareholders_equity: float | None) 
     return total_debt/shareholders_equity
 
 
-    
+def ttm(values: list[float | None]) -> float | None:
+    """Trailing-twelve-month toal: sum of last 4 quarterly values.
+    Returns None unless all 4 present. TTm build on 3 understates by 25%.
+    Expects 4 most recent quarters, newest or oldest first."""
 
+    if len(values) != 4 or any(v is None for v in values):
+        return None
+    return sum(values)
+
+def roic(ttm_net_income: float | None, total_debt: float | None,
+         shareholders_equity: float | None) -> float | None:
+    """Return on invested capital: TTM income over (debt+equity).
+    How much does this company earn per dolar of toal capital entrusted to it.
+    Uses TTM income against currecnt invested capital.
+    Returns None if income is missing or invested capital is missing/ < 0.
+    Proper ROIC uses NOPAT (operating profit after tax) and subs excess cash
+    from invested capital."""
+    
+    if ttm_net_income is None or total_debt is None or shareholders_equity is None:
+        return None
+    invested = total_debt + shareholders_equity
+    if invested <= 0:
+        return None
+    return ttm_net_income/invested
