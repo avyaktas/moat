@@ -100,6 +100,11 @@ Python 3.12 · FastAPI · PostgreSQL 16 · SQLAlchemy 2 (ORM) · Alembic
   documented in the code, refinable.
 - **Fundamentals, not real-time.** Data updates when companies file (quarterly),
   not tick by tick — which is the point for value analysis.
+- **Cumulative cash-flow filers.** Some companies (e.g. Apple) report cash
+  flows year-to-date within the fiscal year rather than per quarter; only
+  their fiscal Q1 carries a standalone quarterly figure. Deriving Q2/Q3 by
+  differencing cumulative periods is a planned extension — same principle
+  as the existing Q4 derivation.
 
 
 ## Roadmap
