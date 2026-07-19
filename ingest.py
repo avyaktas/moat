@@ -36,6 +36,7 @@ from the SEC and writes it into the database.
 import requests
 from sqlalchemy.orm import Session
 from datetime import date
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from database import SessionLocal
 from models import Company, Financials
@@ -171,7 +172,7 @@ def ingest_company(ticker: str, sector: str | None = None) -> int:
             db.add(company)
             db.flush()
 
-        written = 0
+        processed = 0
         for period in sorted(all_periods):
             ocf = series["operating_cash_flow"].get(period)
             capex = series["capex"].get(period)
@@ -184,32 +185,26 @@ def ingest_company(ticker: str, sector: str | None = None) -> int:
             else:
                 total_debt = None
 
-            exists = (
-                db.query(Financials)
-                .filter(
-                    Financials.company_id == company.id,
-                    Financials.period_end == period,
-                )
-                .first()
-            )
-            if exists:
-                continue
+            values = {
+                "company_id": company.id,
+                "period_end": period,
+                "revenue": series["revenue"].get(period),
+                "net_income": series["net_income"].get(period),
+                "free_cash_flow": fcf,
+                "total_debt": total_debt,
+                "shareholders_equity": series["equity"].get(period),
+            }
 
-            db.add(
-                Financials(
-                    company_id=company.id,
-                    period_end=period,
-                    revenue=series["revenue"].get(period),
-                    net_income=series["net_income"].get(period),
-                    free_cash_flow=fcf,
-                    total_debt=total_debt,
-                    shareholders_equity=series["equity"].get(period),
-                )
+            stmt = pg_insert(Financials).values(**values)
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_company_period",
+                set_={k: v for k, v in values.items() if k not in ("company_id", "period_end")},
             )
-            written += 1
+            db.execute(stmt)
+            processed += 1
 
         db.commit()
-        return written
+        return processed
     finally:
         db.close()
 
@@ -218,5 +213,5 @@ if __name__ == "__main__":
     import sys
     ticker = sys.argv[1] if len(sys.argv) > 1 else "MSFT"
     count = ingest_company(ticker)
-    print(f"Wrote {count} new financials rows for {ticker}")
+    print(f"Processed {count} periods for {ticker}")
 
