@@ -28,6 +28,19 @@ aggregates, computed from Microsoft's actual filed financials:
 Those figures cross-check against published Microsoft numbers — because they
 come from the same source: EDGAR filings, ingested and derived by this pipeline.
 
+## Quickstart (Docker)
+ 
+Requires only Docker.
+ 
+```bash
+docker compose up --build            # builds the API image, starts API + Postgres
+docker compose exec api alembic upgrade head   # create the schema
+docker compose exec api python ingest.py MSFT  # ingest any ticker
+```
+ 
+Then open http://localhost:8000/docs for the interactive API, or hit
+http://localhost:8000/company/MSFT/metrics directly.
+
 ## Architecture
 
 ```
@@ -88,14 +101,14 @@ Python 3.12 · FastAPI · PostgreSQL 16 · SQLAlchemy 2 (ORM) · Alembic
 - **Fundamentals, not real-time.** Data updates when companies file (quarterly),
   not tick by tick — which is the point for value analysis.
 
-## Roadmap
 
+## Roadmap
+ 
 - [x] EDGAR ingestion with ticker→CIK lookup (any US-listed company)
 - [x] Q4 derivation from annual filings
 - [x] Value metrics: margins, ROE, D/E, TTM aggregates, ROIC
-- [ ] Upsert-based ingestion (field-level backfill without re-ingesting)
-- [ ] Docker + docker-compose
-- [ ] Deployed instance
+- [x] Upsert-based ingestion (field-level refresh without re-ingesting)
+- [x] Docker + docker-compose
 - [ ] On-demand ingestion (unknown ticker fetched at request time)
 - [ ] ML ranking layer across a company universe
 - [ ] RAG-powered qualitative briefs from 10-K text
