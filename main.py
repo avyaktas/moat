@@ -5,8 +5,30 @@ from sqlalchemy.orm import Session
 from models import Company, Financials
 from database import get_db
 from metrics import debt_to_equity, fcf_margin, net_margin, roe, ttm, roic
+from ingest import ingest_company
 
 app = FastAPI()
+
+def get_or_ingest_company(ticker: str, db: Session) -> Company:
+    """Retur the company, ingesting it on first request.
+    Read through cache: known tickers are served from Postgres, 
+    unkown ones trigger a live EDGAR fetch, after which they've cached. 
+    Tickers SEC has never heard of stil 404"""
+    ticker = ticker.upper()
+    company = db.query(Company).filter(Company.ticker == ticker).first()
+    if company is not None:
+        return company
+    try: 
+        ingest_company(ticker)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Unkown ticker: {ticker}")
+    
+    company = db.query(Company).filter(Company.ticker == ticker).first()
+    if company is None:
+        raise HTTPException(status_code=502, detail="Ingestion failed")
+    return company
+    
+
 
 @app.get("/")
 def read_root():
@@ -26,18 +48,12 @@ def list_companies(db: Session = Depends(get_db)):
 
 @app.get("/company/{ticker}")
 def get_ticker(ticker: str, db: Session = Depends(get_db)):
-    ticker = ticker.upper()
-    row = db.query(Company).filter(Company.ticker == ticker).first()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Company not found")
-    return {"id": row.id, "ticker": row.ticker, "name": row.name, "sector": row.sector}
+    company = get_or_ingest_company(ticker, db)
+    return {"id": company.id, "ticker": company.ticker, "name": company.name, "sector": company.sector}
 
 @app.get("/company/{ticker}/financials")
 def get_financials(ticker: str, db: Session = Depends(get_db)):
-    ticker = ticker.upper()
-    company = db.query(Company).filter(Company.ticker == ticker).first()
-    if company is None:
-        raise HTTPException(status_code=404, detail="Company not found")
+    company = get_or_ingest_company(ticker, db)
     rows = (
         db.query(Financials)
         .filter(Financials.company_id == company.id)
@@ -58,11 +74,7 @@ def get_financials(ticker: str, db: Session = Depends(get_db)):
 
 @app.get("/company/{ticker}/metrics")
 def get_metrics(ticker: str, db: Session = Depends(get_db)):
-    ticker = ticker.upper()
-    company = db.query(Company).filter(Company.ticker == ticker).first()
-    if company is None:
-        raise HTTPException(status_code=404, detail="Company not found")
-
+    company = get_or_ingest_company(ticker, db)
     rows = (
         db.query(Financials)
         .filter(Financials.company_id == company.id)
@@ -96,4 +108,6 @@ def get_metrics(ticker: str, db: Session = Depends(get_db)):
     }
 
     return {"quarterly": quarterly, "ttm": ttm_block}
-    
+
+
+
