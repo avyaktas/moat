@@ -4,6 +4,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
     database_url: str
     test_database_url: str = "postgresql+psycopg://avyaktasharma@localhost:5432/moat_test"
+    anthropic_api_key: str = ""
 
 
 settings = Settings()
