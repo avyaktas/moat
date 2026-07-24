@@ -29,15 +29,18 @@ WHY WE TAKE THE LONGEST SPAN
 """
 
 import re
+import warnings
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
 HEADERS = {"User-Agent": "Avyakta Sharma avyaktansharma@gmail.com"}
 
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:>010}.json"
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"
 
+
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 def _loose(phrase: str) -> re.Pattern:
     """Build a regex matching a phrase with arbitrary whitespace anywhere.
@@ -47,7 +50,7 @@ def _loose(phrase: str) -> re.Pattern:
     words across tags and the text extractor preserves those breaks.
     """
     chars = [re.escape(c) for c in phrase if not c.isspace()]
-    return re.compile(r"\s*".join(chars), re.IGNORECASE)
+    return re.compile(r"[\s.]*".join(chars), re.IGNORECASE)
 
 
 def find_latest_10k(cik: str) -> dict | None:

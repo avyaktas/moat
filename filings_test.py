@@ -63,3 +63,6 @@ def test_extract_section_missing_end_returns_none():
 def test_extract_section_end_before_start_returns_none():
     text = "ITEM 1B comes first ... ITEM 1A RISK FACTORS with nothing after"
     assert extract_section(text, "ITEM 1A RISK FACTORS", "ITEM 1B") is None
+
+def test_loose_matches_real_msft_heading():
+    assert _loose("ITEM 1A RISK FACTORS").search("ITEM 1A. RIS\nK FACTORS") is not None
