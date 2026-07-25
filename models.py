@@ -1,6 +1,6 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from datetime import date
-from sqlalchemy import ForeignKey, Numeric, UniqueConstraint
+from datetime import date, datetime
+from sqlalchemy import ForeignKey, Numeric, UniqueConstraint, DateTime, Text, func
 
 class Base(DeclarativeBase):
     pass
@@ -33,5 +33,23 @@ class Financials(Base):
 
     company = relationship("Company", back_populates="financials")
 
+from datetime import datetime
+from sqlalchemy import DateTime, Text, func
 
 
+class Brief(Base):
+    __tablename__ = "briefs"
+    __table_args__ = (
+        UniqueConstraint("company_id", "question", name="uq_company_question"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text)        
+    addressed: Mapped[bool]
+    quotes: Mapped[str] = mapped_column(Text)        
+    grounding_rate: Mapped[float | None]
+    filing_url: Mapped[str] = mapped_column(Text)
+    report_date: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
