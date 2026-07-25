@@ -1,6 +1,7 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from datetime import date, datetime
 from sqlalchemy import ForeignKey, Numeric, UniqueConstraint, DateTime, Text, func
+from pgvector.sqlalchemy import Vector
 
 class Base(DeclarativeBase):
     pass
@@ -53,3 +54,17 @@ class Brief(Base):
     filing_url: Mapped[str] = mapped_column(Text)
     report_date: Mapped[str]
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+class Chunk(Base):
+    __tablename__ = "chunks"
+    __table_args__ = (
+        UniqueConstraint("company_id", "chunk_index", name="uq_company_chunk"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))
+    chunk_index: Mapped[int]
+    text: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Vector(384))
+    filing_url: Mapped[str] = mapped_column(Text)
+    report_date: Mapped[str]
