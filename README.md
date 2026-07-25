@@ -1,119 +1,159 @@
 # Moat
 
-A financial analysis platform that ingests SEC EDGAR filings for any US-listed
-company and computes the metrics a value investor actually cares about — ROIC,
-FCF margin, TTM returns — served through a REST API. Type a ticker, get up to
-19 years of analyzed fundamentals computed from primary-source filings.
+An LLM-powered financial research platform. Give it any US-listed ticker and it
+ingests the company's SEC filings, computes value-investing metrics, and
+generates **grounding-verified** analyses of the company's 10-K — every claim
+backed by a quote checked against the source document.
 
-Built from scratch as a learning project: every layer hand-written and
-understood, no scaffolding.
+Built from scratch as a learning project.
+---
+
+## What makes it different is that it is measured
+
+Most LLM projects can't answer "how do you know it works?" This one can, with a
+number. The analysis layer ships with an **evaluation harness**:
+
+- **24 questions** across three categories — answerable, absent, and specific —
+  including deliberate **hallucination traps**: questions the model knows the
+  answer to from training (does the filing name Google as a competitor? the EU
+  Digital Markets Act?) but that the document does **not** contain.
+- **Every quote the model returns is verified** by string-matching it against
+  the source filing. A fabricated quote is detected mechanically — no LLM judge,
+  no subjectivity.
+
+Current results on Microsoft's FY2025 10-K:
+
+| Metric | Result |
+|--------|--------|
+| Grounding rate (quotes found in source) | **100%** |
+| Hallucinations (absent questions answered anyway) | **0** |
+| Abstention accuracy | **100%** |
+| Answer correctness (answerable/specific) | **100%** |
+
+Building the eval also caught a bug — in the eval itself: a question keyed as
+"should abstain" was wrong, because the model correctly surfaced Microsoft's
+$28.9B IRS transfer-pricing contingency, disproving the assumption that risk
+factors are purely qualitative. The failing test indicted the answer key, not
+the model.
+
+---
 
 ## Example
 
-`GET /company/MSFT/metrics` returns per-quarter ratios plus trailing-twelve-month
-aggregates, computed from Microsoft's actual filed financials:
+`GET /company/MSFT/brief`
 
 ```json
-"ttm": {
-  "revenue": 318273000000,
-  "net_income": 125216000000,
-  "free_cash_flow": 72916000000,
-  "net_margin": 0.393,
-  "fcf_margin": 0.229,
-  "roe": 0.302,
-  "roic": 0.275
+{
+  "addressed": true,
+  "answer": "The filing organizes its risk factors into major categories: intense
+             competition; cloud and AI execution risk; cybersecurity (including a
+             nation-state attack); regulatory, antitrust, and tax disputes; IP;
+             and general risks including talent retention...",
+  "quotes": [
+    "We face intense competition across all markets for our products and services...",
+    "beginning in late November 2023, a nation-state associated threat actor used
+     a password spray attack to compromise a legacy test account...",
+    "In the NOPAs, the IRS is seeking an additional tax payment of $28.9 billion
+     plus penalties and interest."
+  ],
+  "grounding_rate": 1.0,
+  "filing_url": "https://www.sec.gov/Archives/edgar/data/789019/...",
+  "report_date": "2025-06-30"
 }
 ```
 
-Those figures cross-check against published Microsoft numbers — because they
-come from the same source: EDGAR filings, ingested and derived by this pipeline.
+`GET /company/MSFT/metrics` returns computed value metrics (TTM ROIC 27.5%, net
+margin 39%, etc.) from primary-source EDGAR data.
 
-## Quickstart (Docker)
- 
-Requires only Docker.
- 
-```bash
-docker compose up --build            # builds the API image, starts API + Postgres
-docker compose exec api alembic upgrade head   # create the schema
-docker compose exec api python ingest.py MSFT  # ingest any ticker
-```
- 
-Then open http://localhost:8000/docs for the interactive API, or hit
-http://localhost:8000/company/MSFT/metrics directly.
+---
 
 ## Architecture
 
 ```
-SEC EDGAR API ──> ingest.py ──> PostgreSQL ──> FastAPI ──> JSON
-  companyfacts     - ticker→CIK    - companies     - /companies
-  company_tickers  - quarterly     - financials    - /company/{ticker}
-                     extraction      (Alembic        - /company/{ticker}/financials
-                   - Q4 derivation    migrations)    - /company/{ticker}/metrics
-                   - FCF/debt calc
-                                   metrics.py (pure functions, null-safe)
+                         SEC EDGAR
+              ┌──────────────┴──────────────┐
+       companyfacts API              submissions + filing HTML
+              │                              │
+        ingest.py                       filings.py
+     (numbers → Postgres)         (8MB HTML → 69K risk section)
+              │                              │
+        metrics.py                      analysis.py
+   (ROIC, margins, TTM)          (grounded LLM answer + quote check)
+              │                              │
+              └──────────────┬───────────────┘
+                        FastAPI
+        /company/{ticker}/metrics   /company/{ticker}/brief
+                             │
+                 PostgreSQL (Alembic migrations)
+          companies · financials · briefs (LLM cache)
+
+  Cross-cutting: on-demand ingestion (read-through cache) ·
+  Docker Compose · GitHub Actions CI · pytest · evaluation harness
 ```
 
-## Under the Hood
+## The AI layer, in depth
 
-- **Q4 recovery.** Companies file no standalone fourth-quarter report — Q4 only
-  exists inside the annual 10-K figure. The pipeline detects annual entries by
-  duration (off-calendar fiscal years carry no calendar frames) and derives
-  Q4 = FY − (Q1+Q2+Q3), strictly: three real quarters or nothing. No estimation.
-- **Tag fallbacks across accounting eras.** Revenue lives under different GAAP
-  tags before and after ASC 606 (~2018). Each metric maps to an ordered
-  candidate list; the modern tag wins where present, legacy tags fill history.
-- **Honest nulls everywhere.** Missing data is `None`, never zero and never
-  annualized. A ratio without a denominator is unknown, not 0% — and TTM with
-  a missing quarter returns nothing rather than an understated sum.
-- **Idempotent ingestion.** Re-running writes zero duplicates, enforced both in
-  code and by a composite unique constraint on (company, period).
+- **Section extraction over embeddings.** A 10-K is ~8MB of inline-XBRL HTML
+  (~2M tokens). Because 10-K structure is mandated by regulation (Item 1A is
+  always Risk Factors), the system slices out the relevant section directly —
+  ~69K chars, a 99% reduction — rather than embedding the whole document and
+  hoping vector similarity retrieves the right passages. Simpler and more
+  reliable for section-targeted questions. (Free-form whole-document Q&A, where
+  vector retrieval earns its place, is the planned next layer.)
+- **Grounding by construction.** The prompt forbids outside knowledge and
+  requires verbatim quotes; the code then verifies each quote against the source
+  with whitespace-insensitive matching (filer HTML splits words across tags).
+- **Honest abstention.** When the document doesn't address a question, the
+  correct answer is "not addressed" — the same principle as the honest NULLs in
+  the metrics layer. Unknown is a real answer.
+- **Cached per (company, question)** via Postgres upsert, so repeat requests are
+  instant and concurrent requests don't collide.
 
-## Setup
+## Data engineering highlights
 
-Requires Python 3.12+ and PostgreSQL 16.
+- **Q4 recovery** — companies file no standalone Q4; it's derived as
+  FY − (Q1+Q2+Q3) from the annual figure.
+- **Tag fallbacks across accounting eras** — revenue lives under different GAAP
+  tags before/after ASC 606; the pipeline tries ordered candidates.
+- **Idempotent, upsert-based ingestion** — re-running refreshes rows without
+  duplicates, enforced by composite unique constraints.
+- **Honest nulls everywhere** — missing data is never zero or estimated.
+
+---
+
+## Quickstart (Docker)
 
 ```bash
-python3.12 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-createdb moat
-cp .env.example .env          # then edit with your DB credentials
-alembic upgrade head
-python ingest.py MSFT         # or any ticker
-uvicorn main:app --reload     # then open http://127.0.0.1:8000/docs
+docker compose up --build
+docker compose exec api alembic upgrade head
+docker compose exec api python ingest.py MSFT
+# open http://localhost:8000/docs
 ```
 
-Tests: `pytest` (isolated test database — dev data is never touched).
+Set `ANTHROPIC_API_KEY` in `.env` for the `/brief` endpoint (see `.env.example`).
 
 ## Tech
 
-Python 3.12 · FastAPI · PostgreSQL 16 · SQLAlchemy 2 (ORM) · Alembic
-(migrations) · pytest · GitHub Actions CI
+Python 3.12 · FastAPI · PostgreSQL 16 · SQLAlchemy 2 · Alembic · Anthropic API ·
+BeautifulSoup · Docker + Compose · pytest · GitHub Actions CI
 
-## Scope & limitations
+## Scope & honest limitations
 
-- **Non-financial companies.** Banks and insurers report under a different GAAP
-  taxonomy (interest income vs. revenue, deposits vs. long-term debt). Rather
-  than sum mismatched tags into misleading ratios, the pipeline reports honest
-  gaps for those companies. Sector-specific tag maps are a possible extension.
-- **ROIC is simplified.** It uses TTM net income over gross debt + equity;
-  proper ROIC uses NOPAT and nets out excess cash. Directionally right,
-  documented in the code, refinable.
-- **Fundamentals, not real-time.** Data updates when companies file (quarterly),
-  not tick by tick — which is the point for value analysis.
-- **Cumulative cash-flow filers.** Some companies (e.g. Apple) report cash
-  flows year-to-date within the fiscal year rather than per quarter; only
-  their fiscal Q1 carries a standalone quarterly figure. Deriving Q2/Q3 by
-  differencing cumulative periods is a planned extension — same principle
-  as the existing Q4 derivation.
-
+- **Non-financial companies** — banks use a different GAAP taxonomy; the pipeline
+  reports honest gaps rather than misleading ratios.
+- **Cumulative cash-flow filers** (e.g. Apple) need Q2/Q3 differencing — planned.
+- **ROIC is simplified** — TTM net income over gross debt + equity, not NOPAT.
+- **Section-targeted analysis** — the AI layer answers questions about specific
+  10-K sections; whole-document free-form Q&A (vector retrieval) is next.
 
 ## Roadmap
- 
-- [x] EDGAR ingestion with ticker→CIK lookup (any US-listed company)
-- [x] Q4 derivation from annual filings
-- [x] Value metrics: margins, ROE, D/E, TTM aggregates, ROIC
-- [x] Upsert-based ingestion (field-level refresh without re-ingesting)
-- [x] Docker + docker-compose
-- [ ] On-demand ingestion (unknown ticker fetched at request time)
+
+- [x] EDGAR ingestion, any US-listed company, on-demand
+- [x] Value metrics: margins, ROE, D/E, TTM, ROIC
+- [x] Docker, CI, migrations, isolated tests
+- [x] 10-K section extraction
+- [x] Grounded LLM analysis with citation verification
+- [x] Evaluation harness (grounding, abstention, hallucination traps)
+- [ ] Vector search for free-form whole-document Q&A (pgvector)
 - [ ] ML ranking layer across a company universe
-- [ ] RAG-powered qualitative briefs from 10-K text
+- [ ] Deployed instance
