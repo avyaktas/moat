@@ -113,7 +113,8 @@ def answer_question(question: str, source_text: str, client: Anthropic | None = 
         messages=[{"role": "user", "content": user_message}],
     )
  
-    raw = response.content[0].text.strip()
+    text_blocks = [b.text for b in response.content if b.type == "text"]
+    raw = text_blocks[0].strip() if text_blocks else ""
  
     # Models sometimes wrap JSON in markdown fences despite instructions.
     cleaned = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()

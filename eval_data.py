@@ -1,20 +1,19 @@
 """Evaluation questions for the risk-factor analyzer, as structured data.
 
-Ported from eval_questions.md and verified against Microsoft's FY2025
-10-K Item 1A (69,079 chars, report date 2025-06-30).
+Verified against Microsoft's FY2025 10-K Item 1A (69,079 chars, report
+date 2025-06-30) by keyword search. Answer keys reflect what the document
+actually contains, not what is true about Microsoft in general.
 
 Fields:
-    id             matches the number in eval_questions.md
+    id             matches eval_questions.md
     question       the prompt sent to the analyzer
     category       "answerable" | "absent" | "specific"
     should_abstain True if the correct behavior is "not addressed"
-    key_terms      lowercase substrings a correct answer should contain,
-                   checked case-insensitively. None for abstain cases.
+    key_terms      lowercase substrings a correct answer should contain
+                   (checked case-insensitively). None for abstain cases.
 
-NOTE: key_terms encode YOUR definition of a correct answer. Review each
-one - they are a starting point, not gospel. Too strict and correct
-answers fail; too loose and wrong answers pass. Tuning these is part of
-building a good eval.
+Verified term counts in the source: LinkedIn 1, climate 2, environmental
+4, antitrust 1, employees 15, penalt 4.
 """
 
 QUESTIONS = [
@@ -31,7 +30,7 @@ QUESTIONS = [
         "question": "Does the filing discuss risks related to artificial intelligence?",
         "category": "answerable",
         "should_abstain": False,
-        "key_terms": ["ai"],
+        "key_terms": ["ai"],  # NOTE: weak term - "ai" matches many words. Review.
     },
     {
         "id": 3,
@@ -52,7 +51,7 @@ QUESTIONS = [
         "question": "Does Microsoft discuss risk related to attracting or retaining employees?",
         "category": "answerable",
         "should_abstain": False,
-        "key_terms": ["talent", "employ"],
+        "key_terms": ["employ"],
     },
     {
         "id": 6,
@@ -153,5 +152,52 @@ QUESTIONS = [
         "category": "specific",
         "should_abstain": False,
         "key_terms": ["activision"],
+    },
+    # ---------- Harder traps (verified against term counts) ----------
+    {
+        # antitrust appears (count 1) but as risk, not as a realized penalty
+        # "this year". Tests risk-vs-realized distinction.
+        "id": 21,
+        "question": "Does the filing state that competition has led to specific antitrust penalties against Microsoft this year?",
+        "category": "absent",
+        "should_abstain": True,
+        "key_terms": None,
+    },
+    {
+        # LinkedIn count is 1 - it IS named. So the honest answer is YES,
+        # the filing does reference LinkedIn. Correct behavior is to ANSWER,
+        # not abstain. This trap tests whether the model finds a real but
+        # easy-to-miss mention rather than assuming absence.
+        "id": 22,
+        "question": "Does the filing reference LinkedIn?",
+        "category": "specific",
+        "should_abstain": False,
+        "key_terms": ["linkedin"],
+    },
+    {
+        # "employees" appears 15 times but a HEADCOUNT NUMBER is not given in
+        # risk factors (that's Item 1, Business). Tests false-premise handling.
+        "id": 23,
+        "question": "How many employees does the risk factors section say Microsoft has?",
+        "category": "absent",
+        "should_abstain": True,
+        "key_terms": None,
+    },
+    {
+        # climate (2) and environmental (4) both appear - genuinely answerable.
+        "id": 24,
+        "question": "Does the filing discuss climate-related or environmental risk?",
+        "category": "answerable",
+        "should_abstain": False,
+        "key_terms": ["climate"],
+    },
+    {
+        # Risk factors are qualitative; they describe risks without dollar
+        # figures. Tests over-claiming on quantification.
+        "id": 25,
+        "question": "Does the filing quantify the potential dollar impact of any specific risk?",
+        "category": "answerable",          # was "absent"
+        "should_abstain": False,           # was True
+        "key_terms": ["28.9"],             # the specific figure a correct answer cites
     },
 ]
