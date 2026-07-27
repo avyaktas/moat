@@ -31,6 +31,8 @@ class Financials(Base):
     free_cash_flow: Mapped[float | None] = mapped_column(Numeric)
     total_debt: Mapped[float | None] = mapped_column(Numeric)
     shareholders_equity: Mapped[float | None] = mapped_column(Numeric)
+    cash: Mapped[float | None] = mapped_column(Numeric)
+    short_term_investments: Mapped[float | None] = mapped_column(Numeric)
 
     company = relationship("Company", back_populates="financials")
 

@@ -61,6 +61,11 @@ SNAPSHOT_TAGS = {
     "equity": ["StockholdersEquity"],
     "debt_current": ["LongTermDebtCurrent"],
     "debt_noncurrent": ["LongTermDebtNoncurrent"],
+    "cash": [
+        "CashAndCashEquivalentsAtCarryingValue",
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+    ],
+    "short_term_investments": ["ShortTermInvestments", "MarketableSecuritiesCurrent"],
 }
 
 def fetch_company_facts(cik: str) -> dict:
@@ -193,6 +198,8 @@ def ingest_company(ticker: str, sector: str | None = None) -> int:
                 "free_cash_flow": fcf,
                 "total_debt": total_debt,
                 "shareholders_equity": series["equity"].get(period),
+                "cash": series["cash"].get(period),
+                "short_term_investments": series["short_term_investments"].get(period),
             }
 
             stmt = pg_insert(Financials).values(**values)
