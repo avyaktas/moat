@@ -2,10 +2,13 @@
 
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
-from models import Company, Financials, Brief
+from models import Company, Financials, Brief, Report
 from database import get_db
 from metrics import debt_to_equity, fcf_margin, net_margin, roe, ttm, roic
 from ingest import ingest_company
+from prices import get_price
+from report import build_report_data, synthesize
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 import json
@@ -181,5 +184,68 @@ def _brief_to_dict(b: Brief) -> dict:
     }
 
 
+REPORT_MAX_AGE = timedelta(days=7
+                           )
+@app.get("/company/{ticker}/report")
+def get_report(ticker: str, refresh: bool = False, db: Session = Depends(get_db)):
+    company = get_or_ingest_company(ticker, db)
 
+    cached = (
+        db.query(Report)
+        .filter(Report.company_id == company.id)
+        .first()
+    )
+    if cached is not None and not refresh:
+        age = datetime.now(timezone.utc) - cached.generated_at
+        if age < REPORT_MAX_AGE:
+            payload = json.loads(cached.payload)
+            payload["cache"] = {
+                "cached": True,
+                "generated_at": cached.generated_at.isoformat(),
+                "age_days": round(age.total_seconds() / 86400, 1),
+            }
+            return payload
 
+    # cache miss or stale: build it
+    cik, _ = get_cik(company.ticker)
+    rows = (
+        db.query(Financials)
+        .filter(Financials.company_id == company.id)
+        .order_by(Financials.period_end.desc())
+        .all()
+    )
+
+    data = build_report_data(rows, get_price(company.ticker))
+    if "error" in data:
+        raise HTTPException(status_code=404, detail=data["error"])
+
+    filing = get_risk_factors(cik)
+    narrative = synthesize(data, filing["text"], company.name) if filing else None
+
+    payload = {
+        "company": company.ticker,
+        "name": company.name,
+        "data": data,
+        "narrative": narrative,
+        "sources": {
+            "financials": "SEC EDGAR XBRL companyfacts",
+            "filing": filing["url"] if filing else None,
+            "report_date": filing["report_date"] if filing else None,
+            "price": "yfinance (market data; not from filings)",
+        },
+    }
+
+    stmt = pg_insert(Report).values(
+        company_id=company.id,
+        payload=json.dumps(payload, default=str),
+        generated_at=datetime.now(timezone.utc),
+    ).on_conflict_do_update(
+        constraint="uq_report_company",
+        set_={"payload": json.dumps(payload, default=str),
+              "generated_at": datetime.now(timezone.utc)},
+    )
+    db.execute(stmt)
+    db.commit()
+
+    payload["cache"] = {"cached": False, "generated_at": datetime.now(timezone.utc).isoformat()}
+    return payload

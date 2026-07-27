@@ -74,7 +74,8 @@ def compact(text: str) -> str:
 
 def check_quote(quote: str, source: str) -> bool:
     """Return True if the quote appears in the source, ignoring whitespace."""
-    return compact(quote) in compact(source)
+    q = compact(quote).rstrip(".,;:?\"'")
+    return q in compact(source)
 
 def grounding_rate(quotes: list[str], source: str) -> float | None:
     """Fraction of quotes that actually appear in the source.

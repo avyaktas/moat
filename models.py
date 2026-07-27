@@ -57,6 +57,19 @@ class Brief(Base):
     report_date: Mapped[str]
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
+class Report(Base):
+    __tablename__ = "reports"
+    __table_args__ = (
+        UniqueConstraint("company_id", name="uq_report_company"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))
+    payload: Mapped[str] = mapped_column(Text)          # the full report as JSON
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
 # Deferred: vector retrieval for free form Q and A#
 #class Chunk(Base):
    # __tablename__ = "chunks"
