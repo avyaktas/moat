@@ -213,7 +213,7 @@ def synthesize(report_data: dict, filing_text: str, company_name: str,
 
     from config import settings
 
-    client = client or Anthropic(api_key=settings.anthropic_api_key)
+    client = client or Anthropic(api_key=settings.anthropic_key)
 
     figures = json.dumps(report_data, indent=2, default=str)
     user_message = (

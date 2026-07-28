@@ -100,7 +100,7 @@ def answer_question(question: str, source_text: str, client: Anthropic | None = 
         grounding_rate:  fraction of quotes verified, or None if no quotes
         raw:             the model's unparsed response (for debugging)
     """
-    client = client or Anthropic(api_key=settings.anthropic_api_key)
+    client = client or Anthropic(api_key=settings.anthropic_key)
  
     user_message = (
         f"<document>\n{source_text}\n</document>\n\n"

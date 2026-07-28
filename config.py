@@ -19,6 +19,17 @@ class Settings(BaseSettings):
             return url.replace("postgresql://", "postgresql+psycopg://", 1)
         return url
 
+    @property
+    def anthropic_key(self) -> str:
+        """Strip whitespace from the API key.
+
+        Keys pasted into deployment dashboards often arrive with a trailing
+        newline, which HTTP headers cannot contain - the request fails with
+        an opaque protocol error rather than an auth error. Stripping here
+        makes the app tolerant of how the value was entered.
+        """
+        return self.anthropic_api_key.strip()
+
 
 
 settings = Settings()
