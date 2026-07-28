@@ -238,7 +238,7 @@ def synthesize(report_data: dict, filing_text: str, company_name: str,
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError as e:
-        return {"error": "Model response was not valid JSON: {e}", "raw": raw}
+        return {"error": f"Model response was not valid JSON: {e}", "raw": raw}
 
     # Verify every quote the model attached to a risk.
     risks = parsed.get("risks", [])
