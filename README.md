@@ -5,7 +5,7 @@ computed financials from their SEC filings, a scorecard against value investing
 criteria, the real risks pulled from their 10-K, and a verdict on whether the
 business is worth owning.
 
-**Live:** https://moat-production-a6c2.up.railway.app/docs
+**Live:** https://moat-production-a6c2.up.railway.app/view
 
 Every claim in the analysis comes with a quote from the filing, and the code
 checks that the quote is actually there.

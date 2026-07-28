@@ -1,6 +1,7 @@
 # owns endpoints
 
-from fastapi import FastAPI, Depends, HTTPException, HTMLResponse
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from models import Company, Financials, Brief, Report
 from database import get_db
