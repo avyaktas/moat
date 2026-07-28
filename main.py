@@ -1,6 +1,6 @@
 # owns endpoints
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, HTMLResponse
 from sqlalchemy.orm import Session
 from models import Company, Financials, Brief, Report
 from database import get_db
@@ -9,6 +9,7 @@ from ingest import ingest_company
 from prices import get_price
 from report import build_report_data, synthesize
 from datetime import datetime, timedelta, timezone
+from views import render_report
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 import json
@@ -249,3 +250,9 @@ def get_report(ticker: str, refresh: bool = False, db: Session = Depends(get_db)
 
     payload["cache"] = {"cached": False, "generated_at": datetime.now(timezone.utc).isoformat()}
     return payload
+
+@app.get("/company/{ticker}/report/view", response_class=HTMLResponse)
+def get_report_view(ticker: str, refresh: bool = False, db: Session = Depends(get_db)):
+    """The same report, rendered as a readable tearsheet."""
+    report = get_report(ticker, refresh=refresh, db=db)
+    return render_report(report)

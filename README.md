@@ -5,6 +5,8 @@ computed financials from their SEC filings, a scorecard against value investing
 criteria, the real risks pulled from their 10-K, and a verdict on whether the
 business is worth owning.
 
+**Live:** https://moat-production-a6c2.up.railway.app/docs
+
 Every claim in the analysis comes with a quote from the filing, and the code
 checks that the quote is actually there.
 
@@ -234,5 +236,5 @@ BeautifulSoup, Docker, pytest, GitHub Actions.
 - [x] Caching with per-endpoint invalidation
 - [ ] Vector search for free-form questions (chunking and embeddings are built and
       tested, pgvector storage is not)
-- [ ] Deployed somewhere
+- [x] Deployed somewhere
 - [ ] Ranking across a universe of companies
