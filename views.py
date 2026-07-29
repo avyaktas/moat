@@ -45,7 +45,7 @@ def pct(v: float | None) -> str:
 def mult(v: float | None) -> str:
     if v is None:
         return "—"
-    return f"{v:.1f}x"
+    return f"{float(v):.1f}x"
 
 
 def num(v: float | None) -> str:

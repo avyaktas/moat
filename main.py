@@ -19,10 +19,20 @@ from filings import get_risk_factors
 
 from ingest import get_cik
 
+from decimal import Decimal
 
 
 
 app = FastAPI()
+
+def to_jsonable(v):
+    """Cache-write boundary: Decimals become floats, dates become ISO strings.
+    Anything else unexpected fails loudly instead of being silently stringified."""
+    if isinstance(v, Decimal):
+        return float(v)
+    if hasattr(v, "isoformat"):  # date, datetime
+        return v.isoformat()
+    raise TypeError(f"Not JSON serializable: {type(v)}")
 
 def get_or_ingest_company(ticker: str, db: Session) -> Company:
     """Retur the company, ingesting it on first request.
@@ -236,15 +246,16 @@ def get_report(ticker: str, refresh: bool = False, db: Session = Depends(get_db)
             "price": "yfinance (market data; not from filings)",
         },
     }
-
+    now = datetime.now(timezone.utc)
+    payload_json = json.dumps(payload, default=to_jsonable)
     stmt = pg_insert(Report).values(
         company_id=company.id,
-        payload=json.dumps(payload, default=str),
-        generated_at=datetime.now(timezone.utc),
+        payload=payload_json,
+        generated_at=now,
     ).on_conflict_do_update(
         constraint="uq_report_company",
-        set_={"payload": json.dumps(payload, default=str),
-              "generated_at": datetime.now(timezone.utc)},
+        set_={"payload": payload_json,
+              "generated_at": now},
     )
     db.execute(stmt)
     db.commit()
