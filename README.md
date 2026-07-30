@@ -5,7 +5,8 @@ computed financials from their SEC filings, a scorecard against value investing
 criteria, the real risks pulled from their 10-K, and a verdict on whether the
 business is worth owning.
 
-**Live:** https://moat-production-a6c2.up.railway.app/view
+**Live:** https://moat-production-a6c2.up.railway.app
+(type a ticker, or go straight to a tearsheet: `/company/MSFT/report/view`)
 
 Every claim in the analysis comes with a quote from the filing, and the code
 checks that the quote is actually there.
@@ -118,7 +119,7 @@ range across runs.
                      FastAPI
 ```
 
-Plus Alembic migrations, environment-based config, ~90 tests, Docker Compose, and
+Plus Alembic migrations, environment-based config, 100+ tests, Docker Compose, and
 GitHub Actions CI.
 
 ## Some decisions worth explaining
@@ -146,12 +147,17 @@ condition is a horoscope.
 
 | Endpoint | Returns |
 |---|---|
-| `/company/{ticker}/report` | Full analysis with verdict |
+| `/` | Landing page — type a ticker, go to its tearsheet |
+| `/company/{ticker}/report/view` | The full report as an HTML tearsheet |
+| `/company/{ticker}/report` | The same analysis, as JSON, with verdict |
 | `/company/{ticker}/metrics` | Quarterly ratios and TTM aggregates |
 | `/company/{ticker}/brief` | Grounded answer to any question about the 10-K |
 | `/company/{ticker}/financials` | Raw quarterly data |
 | `/company/{ticker}` | Company record |
 | `/companies` | Everything ingested so far |
+| `/health` | Liveness check |
+
+Interactive API docs are at `/docs` (FastAPI's generated OpenAPI UI).
 
 A ticker you've never requested gets ingested live and served instantly after
 that. Reports cache for 7 days (they include a live price) with `?refresh=true` to
@@ -176,12 +182,16 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 createdb moat && createdb moat_test
 cp .env.example .env
+# Then edit .env: set DATABASE_URL and TEST_DATABASE_URL to your local
+# Postgres (replace USER with your username). Both must be filled in — an
+# empty TEST_DATABASE_URL will stop the tests from finding a database.
 alembic upgrade head
 python ingest.py MSFT
 uvicorn main:app --reload
 ```
 
-Tests: `pytest`. Uses an isolated test database and mocks the LLM and SEC calls.
+Tests: `pytest`. Uses an isolated test database (`TEST_DATABASE_URL`) and mocks
+the LLM and SEC calls, so no `ANTHROPIC_API_KEY` and no network are needed.
 </details>
 
 ## The data problems that took the longest
