@@ -25,8 +25,9 @@ def money(v: float | None) -> str:
     """Large dollar figures at human scale: $318.3B, $46.2M, -$1.2B."""
     if v is None:
         return "—"
+    v = float(v)
     sign = "-" if v < 0 else ""
-    v = abs(float(v))
+    v = abs(v)
     if v >= 1e12:
         return f"{sign}${v / 1e12:.2f}T"
     if v >= 1e9:
