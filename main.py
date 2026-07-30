@@ -14,6 +14,8 @@ from views import render_report
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 import json
+import logging
+import anthropic
 from analysis import answer_question
 from filings import get_risk_factors
 
@@ -22,6 +24,7 @@ from ingest import get_cik
 from decimal import Decimal
 
 
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -232,7 +235,20 @@ def get_report(ticker: str, refresh: bool = False, db: Session = Depends(get_db)
         raise HTTPException(status_code=404, detail=data["error"])
 
     filing = get_risk_factors(cik)
-    narrative = synthesize(data, filing["text"], company.name) if filing else None
+    narrative = None
+    if filing:
+        try:
+            narrative = synthesize(data, filing["text"], company.name)
+        except anthropic.APIStatusError as e:
+            # An Anthropic outage (a 529 overload took the whole endpoint
+            # down this week) must degrade the report, not kill it. Leave
+            # narrative None; Task 1's guard then keeps the degraded payload
+            # out of the cache so the next request retries.
+            logger.warning(
+                "synthesize failed for %s (%s); serving degraded report",
+                company.ticker, e,
+            )
+            narrative = None
 
     payload = {
         "company": company.ticker,

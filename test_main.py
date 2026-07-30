@@ -112,3 +112,35 @@ def test_report_not_cached_when_narrative_is_none(client, monkeypatch):
         assert db.query(Report).count() == 0
     finally:
         db.close()
+
+
+def test_report_survives_anthropic_outage(client, monkeypatch):
+    """A 529 (or any APIStatusError) from Anthropic must degrade the report,
+    not take the endpoint down — and the degraded payload isn't cached."""
+    import anthropic
+    import httpx
+
+    def _raise_overloaded(*a, **k):
+        response = httpx.Response(
+            529, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        )
+        raise anthropic.APIStatusError("Overloaded", response=response, body=None)
+
+    monkeypatch.setattr("main.get_cik", lambda ticker: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda ticker: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", _raise_overloaded)
+
+    resp = client.get("/company/MSFT/report")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["narrative"] is None
+    assert body["data"]["ttm"]["revenue"] == 100.0
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(Report).count() == 0
+    finally:
+        db.close()
