@@ -1,7 +1,8 @@
 # owns endpoints
 
-from fastapi import FastAPI, Depends, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.orm import Session
 from models import Company, Financials, Brief, Report
 from database import get_db
@@ -10,7 +11,7 @@ from ingest import ingest_company
 from prices import get_price
 from report import build_report_data, synthesize
 from datetime import datetime, timedelta, timezone
-from views import render_report
+from views import render_report, render_landing, render_not_found
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 import json
@@ -58,9 +59,20 @@ def get_or_ingest_company(ticker: str, db: Session) -> Company:
     
 
 
-@app.get("/")
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """A 404 under /company/* means a human mistyped a ticker or asked for a
+    company with no filing. Give them the on-brand page with a way back to
+    search, not raw JSON. Every other error keeps the default JSON shape so
+    the API stays an API."""
+    if exc.status_code == 404 and request.url.path.startswith("/company/"):
+        return HTMLResponse(render_not_found(exc.detail), status_code=404)
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
+
+@app.get("/", response_class=HTMLResponse)
 def read_root():
-    return {"message": "Hello from Moat"}
+    return render_landing()
 
 @app.get("/health")
 def read_health():

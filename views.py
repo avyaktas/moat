@@ -18,6 +18,66 @@ FORMATTING IS THE POINT
 import html
 
 
+# ---------------------------------------------------------------- shared shell
+#
+# One source of truth for the look. The tearsheet, the landing page, and the
+# 404 page all pull the same fonts and the same palette from here, so the
+# design can't drift between them.
+
+_FONTS = """<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">"""
+
+# Design tokens + base reset. Plain string (single braces): it is inserted into
+# the report's f-string and into _document() without needing brace-doubling.
+_TOKENS = """
+  :root {
+    --ink:      #16232B;
+    --ink-soft: #4A5A63;
+    --paper:    #F7F5F0;
+    --rule:     #D8D3C8;
+    --hold:     #2F6F5E;
+    --breach:   #B4462F;
+    --unknown:  #9A958A;
+    --measure:  34rem;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: inherit; }
+  ::selection { background: var(--ink); color: var(--paper); }
+"""
+
+
+def _document(title: str, body: str, css: str = "") -> str:
+    """Wrap page body in the shared HTML shell (doctype, head, fonts, tokens).
+
+    `title` and any dynamic content in `body` must be pre-escaped by the caller.
+    """
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+{_FONTS}
+<style>{_TOKENS}{css}</style>
+</head>
+<body>
+{body}
+</body>
+</html>"""
+
+
 # ---------------------------------------------------------------- formatting
 
 
@@ -211,33 +271,8 @@ def render_report(report: dict) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(report.get("company"))} · Moat</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-  :root {{
-    --ink:      #16232B;
-    --ink-soft: #4A5A63;
-    --paper:    #F7F5F0;
-    --rule:     #D8D3C8;
-    --hold:     #2F6F5E;
-    --breach:   #B4462F;
-    --unknown:  #9A958A;
-    --measure:  34rem;
-  }}
-
-  * {{ box-sizing: border-box; }}
-
-  body {{
-    margin: 0;
-    background: var(--paper);
-    color: var(--ink);
-    font-family: 'Inter', -apple-system, system-ui, sans-serif;
-    font-size: 16px;
-    line-height: 1.6;
-    -webkit-font-smoothing: antialiased;
-  }}
-
+{_FONTS}
+<style>{_TOKENS}
   .sheet {{ max-width: 62rem; margin: 0 auto; padding: 4rem 2rem 6rem; }}
 
   /* ---- masthead ---- */
@@ -251,6 +286,9 @@ def render_report(report: dict) -> str:
     font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase;
     color: var(--ink-soft); margin-bottom: 0.5rem;
   }}
+  .eyebrow a {{ text-decoration: none; border-bottom: 1px solid var(--rule);
+                padding-bottom: 1px; }}
+  .eyebrow a:hover {{ border-color: var(--ink-soft); color: var(--ink); }}
   .ticker {{
     font-family: 'Instrument Serif', Georgia, serif;
     font-size: clamp(3rem, 9vw, 5.5rem); line-height: 0.9;
@@ -332,7 +370,9 @@ def render_report(report: dict) -> str:
     display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
     gap: 1px; background: var(--rule); border: 1px solid var(--rule);
   }}
-  .fig {{ background: var(--paper); padding: 1rem 1.1rem; }}
+  .fig {{ background: var(--paper); padding: 1rem 1.1rem;
+          transition: background 150ms ease; }}
+  .fig:hover {{ background: #FCFBF7; }}
   .fig-label {{
     display: block; font-size: 0.72rem; color: var(--ink-soft);
     margin-bottom: 0.35rem;
@@ -393,7 +433,9 @@ def render_report(report: dict) -> str:
     margin-top: 4rem; padding-top: 1.25rem; border-top: 1px solid var(--ink);
     font-size: 0.78rem; color: var(--ink-soft);
   }}
-  footer a {{ color: var(--ink-soft); }}
+  footer a {{ color: var(--ink-soft); text-decoration: none;
+              border-bottom: 1px solid var(--rule); }}
+  footer a:hover {{ color: var(--ink); border-color: var(--ink-soft); }}
   footer p {{ margin: 0.3rem 0; }}
   .disclaimer {{ margin-top: 1.25rem; font-style: italic; }}
 
@@ -413,7 +455,7 @@ def render_report(report: dict) -> str:
 
   <header class="masthead">
     <div>
-      <p class="eyebrow">Moat · Filing analysis</p>
+      <p class="eyebrow"><a href="/">Moat</a> · Filing analysis</p>
       <h1 class="ticker">{esc(report.get("company"))}</h1>
       <p class="company-name">{esc(report.get("name"))} &nbsp;·&nbsp;
          Data as of {esc(data.get("as_of"))}</p>
@@ -481,3 +523,148 @@ def render_report(report: dict) -> str:
 </div>
 </body>
 </html>"""
+
+
+# ---------------------------------------------------------------- landing page
+
+
+def render_landing() -> str:
+    """The front door: a wordmark, a line about what this is, and a ticker box
+    that sends you straight to a tearsheet. No framework, no build step - the
+    only script is a few lines to uppercase the input and build the URL."""
+    css = """
+      .land { min-height: 100vh; display: flex; flex-direction: column; }
+      .land-main { flex: 1; width: 100%; max-width: 46rem;
+                   margin: 0 auto; padding: 13vh 2rem 4rem; }
+      .land .eyebrow {
+        font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
+        letter-spacing: 0.16em; text-transform: uppercase;
+        color: var(--ink-soft); margin: 0 0 1.5rem;
+      }
+      .land h1 {
+        font-family: 'Instrument Serif', Georgia, serif; font-weight: 400;
+        font-size: clamp(4.5rem, 17vw, 9.5rem); line-height: 0.84;
+        letter-spacing: -0.02em; margin: 0;
+      }
+      .land .lede {
+        font-size: 1.15rem; color: var(--ink-soft);
+        max-width: 33rem; margin: 1.75rem 0 3rem;
+      }
+      form.search { display: flex; gap: 0.6rem; max-width: 30rem; }
+      form.search input {
+        flex: 1; font: inherit; font-size: 1.1rem; color: var(--ink);
+        background: transparent; border: none; border-bottom: 2px solid var(--ink);
+        padding: 0.65rem 0.2rem; letter-spacing: 0.06em;
+      }
+      form.search input::placeholder { color: var(--unknown); letter-spacing: 0; }
+      form.search input:focus { outline: none; border-color: var(--hold); }
+      form.search button {
+        font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
+        letter-spacing: 0.14em; text-transform: uppercase;
+        color: var(--paper); background: var(--ink); border: none;
+        padding: 0 1.5rem; cursor: pointer; transition: background 150ms ease;
+      }
+      form.search button:hover { background: var(--hold); }
+      .examples {
+        margin-top: 1.9rem; font-family: 'JetBrains Mono', monospace;
+        font-size: 0.75rem; letter-spacing: 0.06em; color: var(--ink-soft);
+      }
+      .examples a {
+        text-decoration: none; border-bottom: 1px solid var(--rule);
+        padding-bottom: 1px; margin-left: 0.85rem;
+      }
+      .examples a:hover { border-color: var(--ink); color: var(--ink); }
+      .land footer {
+        width: 100%; max-width: 46rem; margin: 0 auto;
+        padding: 1.5rem 2rem 3rem; border-top: 1px solid var(--rule);
+        font-size: 0.78rem; color: var(--ink-soft);
+      }
+      .land footer p { margin: 0.3rem 0; }
+      .land footer .disclaimer { font-style: italic; margin-top: 0.6rem; }
+      @media (max-width: 40rem) {
+        .land-main { padding: 8vh 1.25rem 3rem; }
+        form.search { flex-wrap: wrap; }
+        form.search button { padding: 0.7rem 1.5rem; }
+      }
+    """
+    body = """
+    <div class="land">
+      <main class="land-main">
+        <p class="eyebrow">Moat · Filing analysis</p>
+        <h1>Moat</h1>
+        <p class="lede">Type any US-listed ticker for a grounded analyst report:
+           computed financials from SEC filings, a scorecard against value-investing
+           criteria, and the real risks pulled from the 10-K &mdash; every claim
+           checked against the source document.</p>
+        <form class="search" role="search" onsubmit="return moatGo(event)">
+          <input id="t" name="t" placeholder="Ticker &mdash; e.g. MSFT"
+                 aria-label="Ticker" autocomplete="off" autocapitalize="characters"
+                 autocorrect="off" spellcheck="false">
+          <button type="submit">Analyze</button>
+        </form>
+        <p class="examples">Try
+          <a href="/company/MSFT/report/view">MSFT</a>
+          <a href="/company/AAPL/report/view">AAPL</a>
+          <a href="/company/NVDA/report/view">NVDA</a>
+          <a href="/company/IBM/report/view">IBM</a>
+        </p>
+      </main>
+      <footer>
+        <p>Fundamentals from SEC EDGAR &middot; price from yfinance.</p>
+        <p class="disclaimer">A screen against stated value-investing criteria,
+           not investment advice.</p>
+      </footer>
+    </div>
+    <script>
+      var inp = document.getElementById('t');
+      inp.addEventListener('input', function () { inp.value = inp.value.toUpperCase(); });
+      function moatGo(e) {
+        e.preventDefault();
+        var t = inp.value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '');
+        if (!t) { inp.focus(); return false; }
+        window.location.href = '/company/' + encodeURIComponent(t) + '/report/view';
+        return false;
+      }
+    </script>
+    """
+    return _document("Moat · Filing analysis", body, css)
+
+
+def render_not_found(detail: str) -> str:
+    """A small, on-brand 404 for /company/* misses (bad ticker, no filing),
+    instead of a raw JSON error, with a way back to the search box."""
+    css = """
+      .nf { min-height: 100vh; display: flex; align-items: center;
+            justify-content: center; text-align: center; padding: 2rem; }
+      .nf-inner { max-width: 34rem; }
+      .nf .eyebrow {
+        font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
+        letter-spacing: 0.16em; text-transform: uppercase;
+        color: var(--ink-soft); margin: 0 0 1rem;
+      }
+      .nf h1 {
+        font-family: 'Instrument Serif', Georgia, serif; font-weight: 400;
+        font-size: clamp(3rem, 11vw, 5rem); line-height: 0.9;
+        margin: 0 0 1.1rem; color: var(--breach);
+      }
+      .nf .detail {
+        font-family: 'JetBrains Mono', monospace; font-size: 0.9rem;
+        color: var(--ink); margin: 0 0 2.25rem;
+      }
+      .nf a.back {
+        font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
+        letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none;
+        color: var(--paper); background: var(--ink); padding: 0.75rem 1.4rem;
+        display: inline-block; transition: background 150ms ease;
+      }
+      .nf a.back:hover { background: var(--hold); }
+    """
+    body = f"""
+    <div class="nf"><div class="nf-inner">
+      <p class="eyebrow">Moat</p>
+      <h1>Not found</h1>
+      <p class="detail">{esc(detail)}</p>
+      <a class="back" href="/">&larr; Back to search</a>
+    </div></div>
+    """
+    return _document("Not found · Moat", body, css)

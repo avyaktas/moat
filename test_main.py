@@ -42,6 +42,30 @@ def test_get_company_not_found(client, monkeypatch):
     response = client.get("/company/FAKE")
     assert response.status_code == 404
 
+def test_landing_page_served_at_root(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "Moat" in resp.text
+    # The ticker box sends the user to a report tearsheet.
+    assert "/report/view" in resp.text
+
+
+def test_company_404_returns_html_page(client, monkeypatch):
+    monkeypatch.setattr("ingest.get_cik", _raise_unknown)
+    resp = client.get("/company/FAKE/report/view")
+    assert resp.status_code == 404
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "Not found" in resp.text
+    assert 'href="/"' in resp.text          # a way back to search
+
+
+def test_non_company_404_stays_json(client):
+    resp = client.get("/definitely-not-a-route")
+    assert resp.status_code == 404
+    assert resp.headers["content-type"].startswith("application/json")
+
+
 def _fake_answer(question, source_text, client=None):
     """Stand-in for the LLM call — deterministic, no network, no cost."""
     return {
