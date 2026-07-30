@@ -39,7 +39,7 @@ def money(v: float | None) -> str:
 def pct(v: float | None) -> str:
     if v is None:
         return "—"
-    return f"{v * 100:.1f}%"
+    return f"{float(v) * 100:.1f}%"
 
 
 def mult(v: float | None) -> str:
@@ -51,7 +51,7 @@ def mult(v: float | None) -> str:
 def num(v: float | None) -> str:
     if v is None:
         return "—"
-    return f"{v:.2f}"
+    return f"{float(v):.2f}"
 
 
 def esc(s) -> str:
