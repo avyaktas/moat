@@ -166,7 +166,8 @@ def _figures(ttm: dict, valuation: dict, price: dict | None) -> str:
         ("Market cap", money(valuation.get("market_cap"))),
         ("P / FCF", mult(valuation.get("p_fcf"))),
         ("P / E", mult(valuation.get("p_e"))),
-        ("Share price", f"${price['price']:,.2f}" if price and price.get("price") else "—"),
+        ("Share price",
+         f"${float(price['price']):,.2f}" if price and price.get("price") else "—"),
     ]
     cells = "".join(
         f'<div class="fig"><span class="fig-label">{esc(k)}</span>'
@@ -188,8 +189,12 @@ def _health(health: dict) -> str:
     for key, label in labels.items():
         row = health.get(key, {})
         change = row.get("change")
+        # Coerce like the formatters do: a report cached by the old
+        # json.dumps(default=str) serializer stores numbers as strings, and
+        # "1234" > 0 raises TypeError.
+        change = float(change) if change is not None else None
         direction = ""
-        if change is not None and change != 0:
+        if change:
             direction = "up" if change > 0 else "down"
         rows.append(
             f"<tr>"
@@ -263,7 +268,7 @@ def render_report(report: dict) -> str:
     }.get(verdict, "none")
 
     grounding = narrative.get("grounding_rate")
-    grounding_str = f"{grounding * 100:.0f}%" if grounding is not None else "—"
+    grounding_str = f"{float(grounding) * 100:.0f}%" if grounding is not None else "—"
 
     return f"""<!DOCTYPE html>
 <html lang="en">

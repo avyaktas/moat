@@ -17,7 +17,7 @@ from datetime import date
 from decimal import Decimal
 
 from main import to_jsonable
-from views import money, pct, mult, num
+from views import money, pct, mult, num, render_report
 
 EM_DASH = "—"
 FORMATTERS = (money, pct, mult, num)
@@ -81,3 +81,51 @@ def test_every_formatter_handles_stringified_numbers():
     assert pct("0.42") == "42.0%"
     assert mult("23.4") == "23.4x"
     assert num("12.5") == "12.50"
+
+
+def _legacy_stringified_report() -> dict:
+    """A report as an OLD json.dumps(default=str) cache row would hand it
+    back: every number is a string. render_report does its own comparisons
+    and formatting in _health, _figures and the footer, so those sites must
+    coerce just like the formatters do — a bad one 500s the tearsheet."""
+    return {
+        "company": "MSFT",
+        "name": "Microsoft Corp",
+        "data": {
+            "as_of": "2025-06-30",
+            "ttm": {"revenue": "318273000000", "net_income": "125216000000",
+                    "net_margin": "0.393", "fcf_margin": "0.229",
+                    "revenue_growth": "0.179", "roic": "0.275", "roe": "0.302"},
+            "price": {"price": "512.30", "market_cap": "3700000000000"},
+            "scorecard": {
+                "checks": [{"name": "ROIC", "status": "PASS", "detail": "27.5% vs 15%"}],
+                "summary": {"passed": 5, "evaluable": 6, "unknown": 0},
+                "valuation": {"market_cap": "3700000000000", "p_fcf": "40.5", "p_e": "23.4"},
+                "financial_health": {
+                    # change as a string is the exact value that crashed `> 0`
+                    "cash": {"prior": "70000000000", "current": "75000000000",
+                             "change": "5000000000"},
+                    "total_debt": {"prior": "45000000000", "current": "42000000000",
+                                   "change": "-3000000000"},
+                    "survivability": {"verdict": "Comfortably survivable."},
+                },
+            },
+        },
+        "narrative": {"verdict": "WATCH-CASE", "grounding_rate": "1.0",
+                      "hype_vs_reality": "x", "risks": [], "reasoning": "y",
+                      "strategy": "z"},
+        "sources": {"financials": "SEC EDGAR", "price": "yfinance",
+                    "filing": "http://x", "report_date": "2025-07-30"},
+    }
+
+
+def test_render_report_survives_legacy_stringified_cache():
+    html = render_report(_legacy_stringified_report())
+    assert html.strip().startswith("<!DOCTYPE html>")
+    assert html.rstrip().endswith("</html>")
+    # The values that used to crash now render.
+    assert "WATCH-CASE" in html
+    assert "100%" in html          # grounding_rate coerced from "1.0"
+    assert "$512.30" in html       # share price coerced from "512.30"
+    assert "$5.0B" in html         # a positive change coerced from a string
+    assert "-$3.0B" in html        # a negative change too
