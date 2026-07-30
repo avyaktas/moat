@@ -111,6 +111,82 @@ def extract_annual(facts: dict, tags: list[str]) -> dict[date, tuple[date, float
                 out.setdefault(end, (start, e["val"]))
     return out
 
+# Duration windows, in days, for reasoning about reporting periods.
+# Fiscal quarters run ~13 weeks (91 days), occasionally 14 (98) in 53-week
+# years; the gap up to a half-year (~180) is wide, so these windows are
+# unambiguous.
+_QUARTER_MIN_DAYS = 80
+_QUARTER_MAX_DAYS = 100
+_INTERIM_MAX_DAYS = 300   # Q1-Q3 spans; the annual (~365) is left to derive_q4
+
+
+def extract_ytd(facts: dict, tags: list[str]) -> list[tuple[date, date, float]]:
+    """Return [(period_start, period_end, value)] for a flow tag's duration
+    entries, first candidate tag winning any (start, end) it fills.
+
+    Cumulative filers (Apple, IBM) report cash flow year-to-date within the
+    fiscal year, so their Q2 and Q3 exist only as running totals from the
+    fiscal-year start. Those are exactly the entries extract_quarterly
+    discards for lack of a standalone-quarter frame; derive_interim_quarters
+    differences them back into standalone quarters.
+    """
+    seen: dict[tuple[date, date], float] = {}
+    for tag in tags:
+        try:
+            entries = facts["facts"]["us-gaap"][tag]["units"]["USD"]
+        except KeyError:
+            continue
+        for e in entries:
+            if e.get("form") not in ("10-Q", "10-K") or "start" not in e:
+                continue
+            start = date.fromisoformat(e["start"])
+            end = date.fromisoformat(e["end"])
+            seen.setdefault((start, end), e["val"])
+    return [(s, en, v) for (s, en), v in seen.items()]
+
+
+def derive_interim_quarters(
+    quarterly: dict[date, float],
+    ytd: list[tuple[date, date, float]],
+) -> dict[date, float]:
+    """Recover standalone interim quarters (Q2, Q3) from a year-to-date chain.
+
+    Within a fiscal year every YTD entry shares one start date; sorting by
+    end gives a chain of running totals - Q1, then Q1+Q2, then Q1+Q2+Q3.
+    Consecutive differences are the standalone quarters:
+        Q2 = YTD(Q2) - YTD(Q1),   Q3 = YTD(Q3) - YTD(Q2).
+
+    This is the same real-arithmetic-on-filed-numbers principle as derive_q4,
+    and like it, refuses to guess. Two chain members are differenced ONLY when
+    their durations are exactly one quarter apart. A missing middle period
+    makes that step ~half a year, the guard fails, and the quarter stays
+    absent - never estimated. Existing standalone quarters (discrete filers
+    already publish them) are preserved via setdefault, so on a filer that
+    doesn't need this the whole pass is a no-op. That structural guard, not a
+    ticker list, is what "detects" a cumulative filer.
+    """
+    out = dict(quarterly)
+
+    chains: dict[date, list[tuple[date, float]]] = {}
+    for start, end, val in ytd:
+        chains.setdefault(start, []).append((end, val))
+
+    for start, members in chains.items():
+        members.sort(key=lambda m: m[0])  # by end -> ascending duration
+        prev_val = prev_days = None
+        for end, val in members:
+            days = (end - start).days
+            if prev_days is None:
+                # First member is a standalone quarter only if it spans ~one.
+                if _QUARTER_MIN_DAYS <= days <= _QUARTER_MAX_DAYS:
+                    out.setdefault(end, val)
+            elif (days <= _INTERIM_MAX_DAYS
+                  and _QUARTER_MIN_DAYS <= days - prev_days <= _QUARTER_MAX_DAYS):
+                out.setdefault(end, val - prev_val)
+            prev_val, prev_days = val, days
+    return out
+
+
 def derive_q4(quarterly: dict[date, float],
               annual: dict[date, tuple[date, float]]) -> dict[date, float]:
     """Fill in missing Q4 values: Q4 = FY - (Q1 + Q2 + Q3).
@@ -162,7 +238,11 @@ def ingest_company(ticker: str, sector: str | None = None) -> int:
 
     series = {}
     for key, tags in FLOW_TAGS.items():
-            series[key] = derive_q4(extract_quarterly(facts, tags), extract_annual(facts, tags))
+        # Standalone quarters, then fill cumulative filers' interim Q2/Q3 by
+        # differencing the YTD chain, then derive the fourth quarter.
+        quarterly = extract_quarterly(facts, tags)
+        quarterly = derive_interim_quarters(quarterly, extract_ytd(facts, tags))
+        series[key] = derive_q4(quarterly, extract_annual(facts, tags))
     for key, tags in SNAPSHOT_TAGS.items():
         series[key] = extract_quarterly(facts, tags)
     all_periods = set()
