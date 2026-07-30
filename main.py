@@ -246,21 +246,28 @@ def get_report(ticker: str, refresh: bool = False, db: Session = Depends(get_db)
             "price": "yfinance (market data; not from filings)",
         },
     }
-    now = datetime.now(timezone.utc)
-    payload_json = json.dumps(payload, default=to_jsonable)
-    stmt = pg_insert(Report).values(
-        company_id=company.id,
-        payload=payload_json,
-        generated_at=now,
-    ).on_conflict_do_update(
-        constraint="uq_report_company",
-        set_={"payload": payload_json,
-              "generated_at": now},
-    )
-    db.execute(stmt)
-    db.commit()
 
-    payload["cache"] = {"cached": False, "generated_at": datetime.now(timezone.utc).isoformat()}
+    # Only persist a complete report. A narrative of None means synthesis
+    # failed or the filing was missing; caching that would freeze a degraded
+    # NO VERDICT payload for the full 7-day TTL (this happened to IBM on 7/29).
+    # Return the degraded payload so the caller still sees the computed data,
+    # but skip the write so the next request retries the narrative.
+    now = datetime.now(timezone.utc)
+    if narrative is not None:
+        payload_json = json.dumps(payload, default=to_jsonable)
+        stmt = pg_insert(Report).values(
+            company_id=company.id,
+            payload=payload_json,
+            generated_at=now,
+        ).on_conflict_do_update(
+            constraint="uq_report_company",
+            set_={"payload": payload_json,
+                  "generated_at": now},
+        )
+        db.execute(stmt)
+        db.commit()
+
+    payload["cache"] = {"cached": False, "generated_at": now.isoformat()}
     return payload
 
 @app.get("/company/{ticker}/report/view", response_class=HTMLResponse)

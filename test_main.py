@@ -4,7 +4,8 @@ from main import app
 import json
 import filings
 import analysis
-from models import Brief
+from models import Brief, Report
+from conftest import TestingSessionLocal
 
 client = TestClient(app)
 
@@ -76,3 +77,38 @@ def test_brief_generates_and_caches(client, monkeypatch):
     assert body["addressed"] is True
     assert body["grounding_rate"] == 1.0
     assert "competition" in body["answer"].lower()
+
+
+def _fake_report_data(rows, price_data):
+    """Stand-in for build_report_data — valid computed figures, no DB rows needed."""
+    return {
+        "as_of": "2025-06-30",
+        "ttm": {"revenue": 100.0, "net_income": 30.0, "net_margin": 0.30},
+        "scorecard": {"checks": [], "summary": {}, "valuation": {}},
+    }
+
+
+def test_report_not_cached_when_narrative_is_none(client, monkeypatch):
+    """A failed synthesis (narrative None) must not be cached, but the
+    computed data still comes back — degraded, not down."""
+    monkeypatch.setattr("main.get_cik", lambda ticker: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda ticker: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    # Synthesis fails: return None (Task 1 must then skip the cache write).
+    monkeypatch.setattr("main.synthesize", lambda *a, **k: None)
+
+    resp = client.get("/company/MSFT/report")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Degraded but useful: computed data present, narrative explicitly absent.
+    assert body["narrative"] is None
+    assert body["data"]["ttm"]["revenue"] == 100.0
+
+    # Nothing was persisted, so the next request will retry synthesis.
+    db = TestingSessionLocal()
+    try:
+        assert db.query(Report).count() == 0
+    finally:
+        db.close()
