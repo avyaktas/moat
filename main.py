@@ -12,11 +12,13 @@ from prices import get_price
 from report import build_report_data, synthesize
 from datetime import datetime, timedelta, timezone
 from views import render_report, render_landing, render_not_found
+import time
+from anthropic import APIStatusError
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 import json
 import logging
-import anthropic
+
 from analysis import answer_question
 from filings import get_risk_factors
 
@@ -249,18 +251,14 @@ def get_report(ticker: str, refresh: bool = False, db: Session = Depends(get_db)
     filing = get_risk_factors(cik)
     narrative = None
     if filing:
-        try:
-            narrative = synthesize(data, filing["text"], company.name)
-        except anthropic.APIStatusError as e:
-            # An Anthropic outage (a 529 overload took the whole endpoint
-            # down this week) must degrade the report, not kill it. Leave
-            # narrative None; Task 1's guard then keeps the degraded payload
-            # out of the cache so the next request retries.
-            logger.warning(
-                "synthesize failed for %s (%s); serving degraded report",
-                company.ticker, e,
-            )
-            narrative = None
+        for attempt in range(2):          # one try + one retry
+            try:
+                narrative = synthesize(data, filing["text"], company.name)
+                break
+            except APIStatusError:
+                if attempt == 0:
+                    time.sleep(3)         # brief pause, then retry once
+                # second failure: narrative stays None, report degrades
 
     payload = {
         "company": company.ticker,
