@@ -73,8 +73,19 @@ def compact(text: str) -> str:
     return re.sub(r"\s+", "", text.replace("\xa0", " ")).lower()
 
 def check_quote(quote: str, source: str) -> bool:
-    """Return True if the quote appears in the source, ignoring whitespace."""
+    """Return True if the quote appears in the source, ignoring whitespace.
+
+    An empty quote is never grounded. `"" in source` is True for every
+    source, so without this guard a model returning empty strings scored a
+    perfect grounding rate - the check reporting success precisely when it
+    had verified nothing. The same applies to a quote that is only
+    whitespace or only punctuation, since compacting strips it to nothing.
+    A quote carrying no text cannot support a claim; it is absent, not
+    verified.
+    """
     q = compact(quote).rstrip(".,;:?\"'")
+    if not q:
+        return False
     return q in compact(source)
 
 def grounding_rate(quotes: list[str], source: str) -> float | None:

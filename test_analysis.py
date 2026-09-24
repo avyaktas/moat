@@ -58,3 +58,42 @@ def test_grounding_rate_none_when_no_quotes():
 
 def test_compact_removes_all_whitespace():
     assert compact("A  B\nC") == "abc"
+
+# --- the empty-quote hole ---
+#
+# `"" in anything` is True, so an empty or whitespace-only quote used to pass
+# the grounding check and count toward a 100% grounding rate. A quote that
+# carries no text cannot support a claim; it is absent, not verified.
+
+def test_check_quote_rejects_empty_quote():
+    assert check_quote("", SOURCE) is False
+
+
+def test_check_quote_rejects_whitespace_only_quote():
+    assert check_quote("   \n\t", SOURCE) is False
+    assert check_quote("\xa0", SOURCE) is False
+
+
+def test_check_quote_rejects_punctuation_only_quote():
+    # compact() strips the trailing punctuation, leaving nothing behind.
+    assert check_quote("...", SOURCE) is False
+    assert check_quote(".,;:", SOURCE) is False
+
+
+def test_grounding_rate_counts_empty_quotes_as_ungrounded():
+    # The failure this guards: two empty strings scoring a perfect 1.0.
+    assert grounding_rate(["", ""], SOURCE) == 0.0
+
+
+def test_grounding_rate_mixes_empty_and_real_quotes():
+    assert grounding_rate(["We face intense competition", ""], SOURCE) == 0.5
+
+
+def test_short_quote_still_matches_documented_behaviour():
+    """A very short quote matches trivially - this pins current behaviour.
+
+    Raising a minimum-length floor would move the eval numbers, so it is a
+    deliberate open question rather than a silent change. This test exists so
+    that if the floor is ever introduced, it fails loudly here first.
+    """
+    assert check_quote("We", SOURCE) is True
