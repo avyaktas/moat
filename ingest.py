@@ -232,7 +232,17 @@ def get_cik(ticker: str) -> tuple[str, str]:
     return _ticker_cache[ticker]
 
 def ingest_company(ticker: str, sector: str | None = None) -> int:
-    """Fetch EDGAR data for one company and upsert financials. Returns rows written."""
+    """Fetch EDGAR data for one company and upsert financials. Returns rows written.
+
+    The ticker is normalized here rather than at the caller. get_cik already
+    uppercases for its own lookup, so a lowercase argument resolved to the
+    right CIK and then wrote a lowercase companies row - and since the API
+    path uppercases before calling, the two disagreed only when this function
+    was used directly, as its own __main__ block does. A later request for the
+    uppercase ticker then missed that row, tried to insert its own, and turned
+    a difference in case into a unique-constraint 500.
+    """
+    ticker = ticker.upper()
     cik, name = get_cik(ticker)
     facts = fetch_company_facts(cik)
 

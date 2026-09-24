@@ -94,3 +94,64 @@ def test_first_member_not_treated_as_quarter_when_it_is_a_half_year():
     q = derive_interim_quarters({}, extract_ytd(_facts(entries), ["OCF"]))
     assert date(2024, 6, 30) not in q            # not a standalone quarter
     assert q[date(2024, 9, 30)] == 170.0         # 420 - 250, one clean step
+
+
+# --- ticker normalization at the ingest boundary ---
+#
+# ingest_company queried Company.ticker against its raw argument. The API path
+# uppercases before calling, so this never showed there - but the module's own
+# CLI (`python ingest.py msft`) wrote a lowercase row. A later /company/MSFT
+# then failed to match it, tried to insert MSFT, and the unique constraint
+# turned a case difference into a 500.
+
+import ingest as ingest_module
+from conftest import TestingSessionLocal
+from models import Company
+
+
+def _stub_edgar(monkeypatch, name: str = "Microsoft"):
+    monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", name))
+    monkeypatch.setattr(
+        ingest_module, "fetch_company_facts", lambda cik: {"facts": {"us-gaap": {}}}
+    )
+
+
+def test_ingest_lowercase_ticker_reuses_the_existing_company(client, monkeypatch):
+    # The client fixture seeds MSFT. Ingesting "msft" must find that row,
+    # not create a second company differing only in case.
+    _stub_edgar(monkeypatch)
+    ingest_module.ingest_company("msft")
+
+    db = TestingSessionLocal()
+    try:
+        tickers = sorted(c.ticker for c in db.query(Company).all())
+        assert tickers == ["MSFT"], f"expected one MSFT row, got {tickers}"
+    finally:
+        db.close()
+
+
+def test_ingest_stores_new_ticker_uppercased(client, monkeypatch):
+    _stub_edgar(monkeypatch, name="Alphabet")
+    ingest_module.ingest_company("googl")
+
+    db = TestingSessionLocal()
+    try:
+        tickers = sorted(c.ticker for c in db.query(Company).all())
+        assert "GOOGL" in tickers
+        assert "googl" not in tickers
+    finally:
+        db.close()
+
+
+def test_ingest_is_idempotent_across_case(client, monkeypatch):
+    _stub_edgar(monkeypatch)
+    ingest_module.ingest_company("MSFT")
+    ingest_module.ingest_company("msft")
+    ingest_module.ingest_company("Msft")
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(Company).count() == 1
+    finally:
+        db.close()
