@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 import analysis
 from conftest import TestingSessionLocal
 from models import Company, Report
@@ -1039,3 +1041,139 @@ def test_generated_at_is_utc_on_a_cache_hit(client, monkeypatch):
 def test_generated_at_is_utc_on_a_fresh_build(client, monkeypatch):
     fresh = _cacheable_report(client, monkeypatch).json()
     assert fresh["cache"]["generated_at"].endswith("+00:00")
+
+
+# --- retry classification ---
+#
+# The handler caught every APIError, so a usage-limit or auth failure was
+# retried: a second doomed call plus a backoff sleep for an error that cannot
+# succeed. Measured cost of a pointless second synthesis attempt: ~32 seconds.
+
+import httpx as _httpx
+
+
+def _api_status_error(status: int):
+    import anthropic
+
+    response = _httpx.Response(
+        status, request=_httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    )
+    mapping = {
+        400: anthropic.BadRequestError, 401: anthropic.AuthenticationError,
+        403: anthropic.PermissionDeniedError, 404: anthropic.NotFoundError,
+        422: anthropic.UnprocessableEntityError, 429: anthropic.RateLimitError,
+        500: anthropic.InternalServerError,
+    }
+    cls = mapping.get(status, anthropic.APIStatusError)
+    return cls("boom", response=response, body=None)
+
+
+def _count_synthesis_attempts(client, monkeypatch, raiser):
+    calls, sleeps = [], []
+
+    def _attempt(*a, **k):
+        calls.append(1)
+        raise raiser()
+
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", _attempt)
+    monkeypatch.setattr("main.time.sleep", lambda s: sleeps.append(s))
+
+    resp = client.get("/company/MSFT/report")
+    return resp, len(calls), len(sleeps)
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_non_retryable_status_makes_exactly_one_attempt(client, monkeypatch, status):
+    """The request is wrong; repeating it cannot make it right."""
+    resp, attempts, sleeps = _count_synthesis_attempts(
+        client, monkeypatch, lambda: _api_status_error(status)
+    )
+    assert resp.status_code == 200
+    assert resp.json()["narrative"] is None
+    assert attempts == 1, f"status {status} was retried"
+    assert sleeps == 0, f"status {status} slept before giving up"
+
+
+@pytest.mark.parametrize("status", [429, 500, 503, 529])
+def test_transient_status_is_retried(client, monkeypatch, status):
+    """Rate limits and server errors are exactly what a retry is for."""
+    resp, attempts, sleeps = _count_synthesis_attempts(
+        client, monkeypatch, lambda: _api_status_error(status)
+    )
+    assert resp.status_code == 200
+    assert attempts == 2, f"status {status} was not retried"
+    assert sleeps == 1
+
+
+def test_connection_error_is_retried(client, monkeypatch):
+    _, attempts, _ = _count_synthesis_attempts(
+        client, monkeypatch, _connection_error
+    )
+    assert attempts == 2
+
+
+def test_timeout_is_retried(client, monkeypatch):
+    import anthropic
+
+    def _timeout():
+        return anthropic.APITimeoutError(
+            request=_httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        )
+
+    _, attempts, _ = _count_synthesis_attempts(client, monkeypatch, _timeout)
+    assert attempts == 2
+
+
+def test_malformed_json_is_retried(client, monkeypatch):
+    """A different sample may parse, so this one is worth repeating."""
+    from report import SynthesisError
+
+    def _bad_json():
+        return SynthesisError("not valid JSON", raw="x")
+
+    _, attempts, _ = _count_synthesis_attempts(client, monkeypatch, _bad_json)
+    assert attempts == 2
+
+
+def test_truncation_is_not_retried(client, monkeypatch):
+    """Deterministic: the same prompt and cap truncate at the same place.
+
+    Observed on NVDA - both attempts failed identically and the report
+    degraded after two full 32-second calls.
+    """
+    from report import SynthesisTruncated
+
+    def _truncated():
+        return SynthesisTruncated("hit max_tokens", raw="x")
+
+    resp, attempts, sleeps = _count_synthesis_attempts(client, monkeypatch, _truncated)
+    assert resp.status_code == 200
+    assert resp.json()["narrative"] is None
+    assert attempts == 1, "a truncated response was retried"
+    assert sleeps == 0
+
+
+def test_a_retry_that_succeeds_still_produces_a_report(client, monkeypatch):
+    """Fail-fast must not have broken the case retries exist for."""
+    attempts = []
+
+    def _fail_then_succeed(*a, **k):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise _api_status_error(529)
+        return {"verdict": "BUY-CASE", "risks": [], "grounding_rate": 1.0}
+
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", _fail_then_succeed)
+    monkeypatch.setattr("main.time.sleep", lambda s: None)
+
+    resp = client.get("/company/MSFT/report")
+    assert resp.json()["narrative"]["verdict"] == "BUY-CASE"
+    assert len(attempts) == 2

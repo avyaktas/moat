@@ -399,3 +399,80 @@ def test_synthesize_still_raises_on_genuinely_broken_json():
         pass
     else:
         raise AssertionError("tolerating control characters swallowed a real failure")
+
+
+# --- truncation is a distinct failure, and retrying it is pointless ---
+#
+# Measured on NVDA: the synthesis prompt routinely lands near the ceiling
+# (2,978 output tokens against a 4,000 cap). When five or six verbatim quotes
+# push it over, the response is cut mid-string, json.loads reports
+# "Unterminated string", and the retry produces the same truncation - two full
+# 32-second calls for no verdict at all.
+
+class _StopReasonClient:
+    """Stands in for Anthropic, reporting a chosen stop_reason."""
+
+    def __init__(self, reply: str, stop_reason: str = "end_turn"):
+        self._reply = reply
+        self._stop_reason = stop_reason
+        self.calls = 0
+        self.messages = self
+
+    def create(self, **kwargs):
+        self.calls += 1
+        reply, stop_reason = self._reply, self._stop_reason
+
+        class _B:
+            type = "text"
+            text = reply
+
+        class _R:
+            content = [_B()]
+
+        _R.stop_reason = stop_reason
+        return _R()
+
+
+def test_truncated_response_raises_truncation_error():
+    from report import SynthesisTruncated
+
+    client = _StopReasonClient('{"verdict": "WATCH-CASE", "risks": [{"quote": "unte',
+                               stop_reason="max_tokens")
+    try:
+        report_module.synthesize({"ttm": {}}, "filing", "Co", client=client)
+    except SynthesisTruncated as exc:
+        assert "max_tokens" in str(exc) or "truncat" in str(exc).lower()
+    else:
+        raise AssertionError("a truncated response should raise SynthesisTruncated")
+
+
+def test_truncation_error_is_a_synthesis_error():
+    """main.py's handler catches SynthesisError; truncation must not escape it."""
+    from report import SynthesisError, SynthesisTruncated
+
+    assert issubclass(SynthesisTruncated, SynthesisError)
+
+
+def test_complete_response_is_unaffected_by_the_stop_reason_check():
+    client = _StopReasonClient('{"verdict": "BUY-CASE", "risks": []}',
+                               stop_reason="end_turn")
+    result = report_module.synthesize({"ttm": {}}, "filing", "Co", client=client)
+    assert result["verdict"] == "BUY-CASE"
+
+
+def test_missing_stop_reason_does_not_break_synthesis():
+    """A stub client without stop_reason must still work - several tests use one."""
+    client = _CapturingClient('{"verdict": "WATCH-CASE", "risks": []}')
+    result = report_module.synthesize({"ttm": {}}, "filing", "Co", client=client)
+    assert result["verdict"] == "WATCH-CASE"
+
+
+def test_max_tokens_leaves_headroom_over_observed_output():
+    """2,978 output tokens were observed against a 4,000 cap on a real filing.
+
+    That headroom is too thin: a slightly longer set of quotes truncates the
+    JSON and wastes the whole call. This pins the ceiling well clear of it.
+    """
+    from report import SYNTHESIS_MAX_TOKENS
+
+    assert SYNTHESIS_MAX_TOKENS >= 8000

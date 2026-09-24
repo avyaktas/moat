@@ -147,6 +147,17 @@ def build_report_data(rows: list, price_data: dict | None) -> dict:
     }
 
 
+SYNTHESIS_MODEL = "claude-sonnet-5"
+
+# Measured on NVDA's FY2026 risk factors: 2,978 output tokens against the
+# previous 4,000 cap. That headroom is too thin for a prompt that asks for
+# three to six verbatim quotes plus several paragraphs - a slightly longer
+# filing pushes it over, the JSON is cut mid-string, and the entire 32-second
+# call is wasted. Raising the ceiling does not ask the model for more; it
+# stops cutting off what it was already asked to produce.
+SYNTHESIS_MAX_TOKENS = 8000
+
+
 class SynthesisError(RuntimeError):
     """Synthesis did not produce a usable narrative.
 
@@ -163,6 +174,17 @@ class SynthesisError(RuntimeError):
     def __init__(self, message: str, raw: str | None = None):
         super().__init__(message)
         self.raw = raw
+
+
+class SynthesisTruncated(SynthesisError):
+    """The model ran out of output budget mid-response.
+
+    A subclass of SynthesisError so existing handlers still degrade the report
+    rather than 500, but distinguishable so the retry logic can decline to
+    repeat a call that will fail the same way. This is the one synthesis
+    failure that is deterministic: the prompt and the cap have not changed, so
+    neither will the outcome.
+    """
 
 
 SYNTHESIS_PROMPT = """You are analyzing a company as a business owner would - \
@@ -247,14 +269,26 @@ def synthesize(report_data: dict, filing_text: str, company_name: str,
     )
 
     response = client.messages.create(
-        model="claude-sonnet-5",
-        max_tokens=4000,
+        model=SYNTHESIS_MODEL,
+        max_tokens=SYNTHESIS_MAX_TOKENS,
         system=SYNTHESIS_PROMPT,
         messages=[{"role": "user", "content": user_message}],
     )
 
     text_blocks = [b.text for b in response.content if b.type == "text"]
     raw = text_blocks[0].strip() if text_blocks else ""
+
+    # A truncated response is a different failure from a malformed one, and
+    # the difference matters to the caller: re-sending the same prompt
+    # truncates again at the same place. Observed on NVDA, where both attempts
+    # failed identically and the report degraded after two full calls.
+    # getattr because several test stubs return a response without the field.
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        raise SynthesisTruncated(
+            f"Model response hit max_tokens ({SYNTHESIS_MAX_TOKENS}) and was "
+            f"cut off; retrying the same prompt would truncate again",
+            raw=raw,
+        )
 
     import re
     cleaned = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()

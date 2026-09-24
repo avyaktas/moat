@@ -29,7 +29,12 @@ from logging_config import configure_logging
 from metrics import debt_to_equity, fcf_margin, net_margin, roe, roic, ttm
 from models import Brief, Company, Financials, Report
 from prices import get_price
-from report import SynthesisError, build_report_data, synthesize
+from report import (
+    SynthesisError,
+    SynthesisTruncated,
+    build_report_data,
+    synthesize,
+)
 from schemas import (
     BriefOut,
     CompanyOut,
@@ -526,6 +531,38 @@ def _cache_headers(etag: str) -> dict[str, str]:
 # than a third attempt's latency.
 SYNTHESIS_ATTEMPTS = 2
 SYNTHESIS_BACKOFF_SECONDS = 3
+
+# Statuses where the request itself is the problem. Re-sending it unchanged
+# produces the same answer, so a retry buys nothing and costs a full synthesis
+# call - measured at ~32 seconds - plus the backoff. 400 is the one that
+# actually bit: an exhausted usage limit arrives as BadRequestError, which is
+# an APIError, so the old blanket handler dutifully retried it.
+NON_RETRYABLE_STATUS = frozenset({400, 401, 403, 404, 422})
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Whether repeating an identical synthesis call could plausibly work.
+
+    Retryable: rate limits (429), server errors and overload (5xx/529),
+    connection failures and timeouts, and a reply that would not parse - a
+    different sample may well parse.
+
+    Not retryable: the fixed-status client errors above, and a truncated
+    response. Truncation is the interesting case because it looks transient
+    and is not: the prompt and the token ceiling are unchanged, so the second
+    attempt is cut off at the same place. Observed on NVDA, where both
+    attempts failed identically and the report degraded after two full calls.
+    """
+    if isinstance(exc, SynthesisTruncated):
+        return False
+    if isinstance(exc, SynthesisError):
+        return True
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        # Connection errors and timeouts carry no status. They are exactly
+        # what a retry is for.
+        return True
+    return status not in NON_RETRYABLE_STATUS
 @app.get("/company/{ticker}/report", response_model=ReportOut)
 def get_report(request: Request, response: Response, ticker: TickerPath,
                refresh: bool = False, token: str | None = None,
@@ -608,12 +645,17 @@ def _build_report(request: Request, response: Response, company: Company,
                 # through APIStatusError, so catching the narrower class let
                 # an ordinary network blip 500 the whole report instead of
                 # degrading it to computed-figures-only.
+                retryable = _is_retryable(exc)
                 last = attempt == SYNTHESIS_ATTEMPTS - 1
                 logger.warning(
-                    "synthesis attempt %d/%d failed for %s: %s: %s",
+                    "synthesis attempt %d/%d failed for %s: %s: %s (retryable=%s)",
                     attempt + 1, SYNTHESIS_ATTEMPTS, company.ticker,
-                    type(exc).__name__, exc,
+                    type(exc).__name__, exc, retryable,
                 )
+                if not retryable:
+                    # Giving up now saves a second full-length call that would
+                    # fail the same way, and the sleep before it.
+                    break
                 if not last:
                     # Back off before retrying; never sleep after the final
                     # attempt, which would delay the response for nothing.
