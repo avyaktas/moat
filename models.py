@@ -1,7 +1,6 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from datetime import date, datetime
 from sqlalchemy import ForeignKey, Numeric, UniqueConstraint, DateTime, Text, func
-from pgvector.sqlalchemy import Vector
 
 class Base(DeclarativeBase):
     pass
