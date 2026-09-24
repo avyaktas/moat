@@ -16,9 +16,13 @@ from prices import get_price
 from report import SynthesisError, build_report_data, synthesize
 from datetime import datetime, timedelta, timezone
 from views import render_report, render_landing, render_not_found
+import secrets
 import time
 import requests
 from anthropic import APIError
+
+import ratelimit
+from config import settings
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 import json
@@ -40,6 +44,70 @@ app = FastAPI()
 # appear in class shares (BRK.B, BF-B). Bounding the shape here rejects junk
 # at the edge, before it costs a database round trip or an SEC lookup, and
 # keeps unbounded user input out of the path entirely.
+def _client_key(request: Request) -> str:
+    """Identify the caller for rate limiting.
+
+    Railway terminates TLS and proxies, so request.client.host is the proxy
+    and X-Forwarded-For carries the original client. The leftmost entry is
+    the one the edge saw. A caller can forge that header, which is another
+    reason this is a speed bump rather than a security control - see the
+    module docstring in ratelimit.py.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _enforce_rate_limit(request: Request) -> None:
+    """Reject a caller who is spending faster than the configured rate."""
+    key = _client_key(request)
+    if ratelimit.allow(key, settings.rate_limit_burst,
+                       settings.rate_limit_per_minute):
+        return
+    retry = ratelimit.retry_after_seconds(settings.rate_limit_per_minute)
+    logger.warning("rate limit hit by %s on %s", key, request.url.path)
+    raise HTTPException(
+        status_code=429,
+        detail="Too many requests. This endpoint generates a paid analysis; "
+               "please slow down.",
+        headers={"Retry-After": str(retry)},
+    )
+
+
+def _refresh_requested(refresh: bool, token: str | None) -> bool:
+    """Whether to honour ?refresh=, which forces a paid regeneration.
+
+    With no refresh_token configured this is permitted, which keeps local
+    development and the test suite working unchanged. With one configured it
+    must match, compared in constant time so the check does not leak the
+    secret through timing.
+    """
+    if not refresh:
+        return False
+
+    configured = settings.refresh_token.strip()
+    if not configured:
+        return True
+
+    if not token or not secrets.compare_digest(token, configured):
+        raise HTTPException(
+            status_code=403,
+            detail="refresh requires a valid token",
+        )
+    return True
+
+
+# An exposed deployment with no refresh token is the case worth warning about:
+# anyone can force unlimited paid regeneration. Logged once at import rather
+# than per request.
+if settings.anthropic_key and not settings.refresh_token.strip():
+    logger.warning(
+        "refresh_token is not set: ?refresh= can force paid regeneration "
+        "without a credential"
+    )
+
+
 TickerPath = Annotated[
     str, Path(min_length=1, max_length=10, pattern=r"^[A-Za-z0-9.\-]+$")
 ]
@@ -118,7 +186,15 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     """
     if exc.status_code == 404 and _is_html_route(request.url.path):
         return HTMLResponse(render_not_found(exc.detail), status_code=404)
-    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    # getattr because StarletteHTTPException carries headers but the bare
+    # 404s Starlette raises for unmatched routes do not. Dropping them silently
+    # cost the Retry-After on a 429, which is the one header a rate-limited
+    # caller actually needs.
+    return JSONResponse(
+        {"detail": exc.detail},
+        status_code=exc.status_code,
+        headers=getattr(exc, "headers", None),
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -258,8 +334,12 @@ def _brief_is_current(ticker: str, cached: Brief) -> bool:
 
 
 @app.get("/company/{ticker}/brief")
-def get_brief(ticker: TickerPath, question: QuestionQuery = DEFAULT_QUESTION,
-              refresh: bool = False, db: Session = Depends(get_db)):
+def get_brief(request: Request, ticker: TickerPath,
+              question: QuestionQuery = DEFAULT_QUESTION,
+              refresh: bool = False, token: str | None = None,
+              db: Session = Depends(get_db)):
+    _enforce_rate_limit(request)
+    refresh = _refresh_requested(refresh, token)
     company = get_or_ingest_company(ticker, db)
 
     # Cache check first: on a hit the only upstream work is a freshness
@@ -343,7 +423,10 @@ REPORT_MAX_AGE = timedelta(days=7)
 SYNTHESIS_ATTEMPTS = 2
 SYNTHESIS_BACKOFF_SECONDS = 3
 @app.get("/company/{ticker}/report")
-def get_report(ticker: TickerPath, refresh: bool = False, db: Session = Depends(get_db)):
+def get_report(request: Request, ticker: TickerPath, refresh: bool = False,
+               token: str | None = None, db: Session = Depends(get_db)):
+    _enforce_rate_limit(request)
+    refresh = _refresh_requested(refresh, token)
     company = get_or_ingest_company(ticker, db)
 
     cached = (
@@ -436,7 +519,8 @@ def get_report(ticker: TickerPath, refresh: bool = False, db: Session = Depends(
     return payload
 
 @app.get("/company/{ticker}/report/view", response_class=HTMLResponse)
-def get_report_view(ticker: TickerPath, refresh: bool = False, db: Session = Depends(get_db)):
+def get_report_view(request: Request, ticker: TickerPath, refresh: bool = False,
+                    token: str | None = None, db: Session = Depends(get_db)):
     """The same report, rendered as a readable tearsheet."""
-    report = get_report(ticker, refresh=refresh, db=db)
+    report = get_report(request, ticker, refresh=refresh, token=token, db=db)
     return render_report(report)

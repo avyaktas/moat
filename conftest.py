@@ -38,3 +38,22 @@ def client():
 
     app.dependency_overrides.clear()
     Base.metadata.drop_all(engine)
+
+@pytest.fixture(autouse=True)
+def _isolate_process_caches():
+    """Reset in-process state between tests.
+
+    The rate limiter, the price cache and the filing-metadata cache are all
+    module-level dicts that outlive a single test. Without this, one test's
+    requests would consume another's rate-limit budget and cached prices
+    would leak across cases - the tests would pass or fail depending on the
+    order they ran in.
+    """
+    import filings
+    import prices
+    import ratelimit
+
+    ratelimit.clear()
+    prices.clear_price_cache()
+    filings.clear_filing_caches()
+    yield

@@ -6,6 +6,19 @@ class Settings(BaseSettings):
     test_database_url: str = "postgresql+psycopg://avyaktasharma@localhost:5432/moat_test"
     anthropic_api_key: str = ""
 
+    # Rate limiting for the two endpoints that spend money. Burst is how many
+    # requests one client may make back to back; per_minute is the sustained
+    # rate it refills at. A burst of 0 disables limiting, which is the local
+    # default in tests.
+    rate_limit_burst: int = 10
+    rate_limit_per_minute: float = 20.0
+
+    # Shared secret for ?refresh=, which bypasses the report cache and forces
+    # a paid regeneration. Empty means unprotected: convenient locally, and
+    # warned about at startup when an API key is present, since that
+    # combination is what a real deployment looks like.
+    refresh_token: str = ""
+
     @property
     def db_url(self) -> str:
         """Normalize the driver prefix.

@@ -686,3 +686,106 @@ def test_real_tickers_with_dots_and_dashes_still_work(client, monkeypatch):
         resp = client.get(f"/company/{ticker}")
         assert resp.status_code == 404, f"{ticker} was rejected by the pattern"
     assert seen == ["BRK.B", "BF-B"]
+
+
+# --- rate limiting and the refresh lever ---
+#
+# /brief and /report each spend an Anthropic call plus an SEC fetch on a cache
+# miss, and ?refresh= bypasses the cache outright. Unauthenticated and
+# publicly reachable, that is a loop anyone can run to drain the API budget.
+
+import ratelimit
+from config import settings as app_settings
+
+
+def test_rate_limit_returns_429_past_the_burst(client, monkeypatch):
+    monkeypatch.setattr(app_settings, "rate_limit_burst", 3)
+    monkeypatch.setattr(app_settings, "rate_limit_per_minute", 0.0)
+    ratelimit.clear()
+
+    codes = [client.get("/company/MSFT/report").status_code for _ in range(5)]
+    assert 429 in codes, f"never rate limited: {codes}"
+    assert codes.count(429) == 2, f"expected the last two to be limited: {codes}"
+
+
+def test_rate_limited_response_has_retry_after(client, monkeypatch):
+    monkeypatch.setattr(app_settings, "rate_limit_burst", 1)
+    monkeypatch.setattr(app_settings, "rate_limit_per_minute", 6.0)
+    ratelimit.clear()
+
+    client.get("/company/MSFT/report")
+    resp = client.get("/company/MSFT/report")
+    assert resp.status_code == 429
+    assert resp.headers["Retry-After"] == "10"
+
+
+def test_rate_limit_is_per_client(client, monkeypatch):
+    monkeypatch.setattr(app_settings, "rate_limit_burst", 1)
+    monkeypatch.setattr(app_settings, "rate_limit_per_minute", 0.0)
+    ratelimit.clear()
+
+    client.get("/company/MSFT/report", headers={"X-Forwarded-For": "1.1.1.1"})
+    blocked = client.get("/company/MSFT/report", headers={"X-Forwarded-For": "1.1.1.1"})
+    other = client.get("/company/MSFT/report", headers={"X-Forwarded-For": "2.2.2.2"})
+
+    assert blocked.status_code == 429
+    assert other.status_code != 429, "a different client must not inherit the limit"
+
+
+def test_free_endpoints_are_not_rate_limited(client, monkeypatch):
+    """Only the endpoints that spend money are limited."""
+    monkeypatch.setattr(app_settings, "rate_limit_burst", 1)
+    monkeypatch.setattr(app_settings, "rate_limit_per_minute", 0.0)
+    ratelimit.clear()
+
+    for _ in range(5):
+        assert client.get("/health").status_code == 200
+        assert client.get("/companies").status_code == 200
+
+
+def test_refresh_is_open_when_no_token_is_configured(client, monkeypatch):
+    """Local development and the existing tests must keep working."""
+    monkeypatch.setattr(app_settings, "refresh_token", "")
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", lambda *a, **k: None)
+
+    assert client.get("/company/MSFT/report?refresh=true").status_code == 200
+
+
+def test_refresh_without_token_is_403_when_configured(client, monkeypatch):
+    monkeypatch.setattr(app_settings, "refresh_token", "s3cret")
+    resp = client.get("/company/MSFT/report?refresh=true")
+    assert resp.status_code == 403
+
+
+def test_refresh_with_wrong_token_is_403(client, monkeypatch):
+    monkeypatch.setattr(app_settings, "refresh_token", "s3cret")
+    resp = client.get("/company/MSFT/report?refresh=true&token=wrong")
+    assert resp.status_code == 403
+
+
+def test_refresh_with_correct_token_is_allowed(client, monkeypatch):
+    monkeypatch.setattr(app_settings, "refresh_token", "s3cret")
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", lambda *a, **k: None)
+
+    resp = client.get("/company/MSFT/report?refresh=true&token=s3cret")
+    assert resp.status_code == 200
+
+
+def test_normal_request_unaffected_when_token_is_configured(client, monkeypatch):
+    """Protecting refresh must not require a token for ordinary reads."""
+    monkeypatch.setattr(app_settings, "refresh_token", "s3cret")
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", lambda *a, **k: None)
+
+    assert client.get("/company/MSFT/report").status_code == 200
