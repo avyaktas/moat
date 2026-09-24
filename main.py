@@ -21,7 +21,7 @@ import json
 import logging
 
 from analysis import answer_question
-from filings import get_risk_factors
+from filings import find_latest_10k, get_risk_factors
 
 from ingest import get_cik
 
@@ -192,9 +192,47 @@ def get_metrics(ticker: str, db: Session = Depends(get_db)):
 DEFAULT_QUESTION = "What are the most significant risks this company identifies, and how does it describe them?"
 
 
+def _brief_is_current(ticker: str, cached: Brief) -> bool:
+    """True if a cached brief was written against the company's newest 10-K.
+
+    Briefs had no expiry and no refresh, so one generated against last year's
+    filing was served indefinitely - while the row already stored the
+    report_date that would have revealed it. Comparing against the newest
+    filing is both more correct and cheaper than a blind TTL: it re-reads the
+    submissions index, a small JSON, rather than the 8MB document, and it
+    regenerates exactly when the answer could actually have changed.
+
+    If the SEC cannot be reached, the cached brief is treated as current. A
+    possibly-stale answer beats no answer, and refusing to serve a page we
+    already have because an upstream is down would be the wrong trade.
+    """
+    try:
+        cik, _ = get_cik(ticker)
+        latest = find_latest_10k(cik)
+    except requests.RequestException as exc:
+        logger.warning("could not check filing freshness for %s: %s", ticker, exc)
+        return True
+
+    if latest is None:
+        return True
+    return cached.report_date == latest["report_date"]
+
+
 @app.get("/company/{ticker}/brief")
-def get_brief(ticker: str, question: str = DEFAULT_QUESTION, db: Session = Depends(get_db)):
+def get_brief(ticker: str, question: str = DEFAULT_QUESTION,
+              refresh: bool = False, db: Session = Depends(get_db)):
     company = get_or_ingest_company(ticker, db)
+
+    # Cache check first: on a hit the only upstream work is a freshness
+    # probe, which find_latest_10k serves from its own cache most of the time.
+    cached = (
+        db.query(Brief)
+        .filter(Brief.company_id == company.id, Brief.question == question)
+        .first()
+    )
+    if cached is not None and not refresh and _brief_is_current(company.ticker, cached):
+        return _brief_to_dict(cached)
+
     try:
         cik, _ = get_cik(company.ticker)
     except requests.RequestException as exc:
@@ -204,16 +242,8 @@ def get_brief(ticker: str, question: str = DEFAULT_QUESTION, db: Session = Depen
             status_code=502,
             detail="SEC EDGAR is unavailable right now; please try again shortly.",
         ) from exc
-    #cache check
-    cached = (
-        db.query(Brief)
-        .filter(Brief.company_id == company.id, Brief.question == question)
-        .first()
-    )
-    if cached is not None:
-        return _brief_to_dict(cached)
 
-    # cache miss: fetch filing, run analysis
+    # cache miss, stale, or refresh: fetch filing, run analysis
     try:
         filing = get_risk_factors(cik)
     except requests.RequestException as exc:

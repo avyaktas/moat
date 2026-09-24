@@ -4,7 +4,7 @@ from main import app
 import json
 import filings
 import analysis
-from models import Brief, Report
+from models import Brief, Company, Report
 from conftest import TestingSessionLocal
 
 client = TestClient(app)
@@ -450,3 +450,103 @@ def test_report_degrades_when_cik_lookup_fails(client, monkeypatch):
     resp = client.get("/company/MSFT/report")
     assert resp.status_code == 200
     assert resp.json()["narrative"] is None
+
+
+# --- brief cache invalidation ---
+#
+# Reports have a 7-day TTL. Briefs had none and no refresh, so a brief
+# generated against last year's 10-K was served forever - even though the row
+# already stored the report_date that would have revealed it was stale.
+
+from models import Brief as BriefModel
+
+
+def _seed_brief(question: str, report_date: str, answer: str = "cached answer"):
+    db = TestingSessionLocal()
+    try:
+        company = db.query(Company).filter(Company.ticker == "MSFT").one()
+        db.add(BriefModel(
+            company_id=company.id, question=question, answer=answer,
+            addressed=True, quotes=json.dumps(["We face intense competition."]),
+            grounding_rate=1.0, filing_url="https://example.com/old.htm",
+            report_date=report_date,
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _patch_brief_boundaries(monkeypatch, report_date: str, answers: list):
+    """Stub the SEC and the LLM; `answers` records each analysis call."""
+    def _answer(question, source_text, client=None):
+        answers.append(question)
+        return {
+            "addressed": True, "answer": "freshly generated",
+            "quotes": ["We face intense competition."],
+            "quote_checks": [True], "grounding_rate": 1.0, "raw": "{}",
+        }
+
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.answer_question", _answer)
+    monkeypatch.setattr("main.get_risk_factors", lambda cik: {
+        "text": "ITEM 1A. RISK FACTORS We face intense competition.",
+        "url": "https://example.com/new.htm",
+        "filing_date": "2026-07-29", "report_date": report_date,
+    })
+    monkeypatch.setattr("main.find_latest_10k", lambda cik: {
+        "url": "https://example.com/new.htm", "filing_date": "2026-07-29",
+        "report_date": report_date, "accession": "x",
+    })
+
+
+def test_brief_cache_hit_when_filing_unchanged(client, monkeypatch):
+    from main import DEFAULT_QUESTION
+    _seed_brief(DEFAULT_QUESTION, "2025-06-30")
+    answers = []
+    _patch_brief_boundaries(monkeypatch, "2025-06-30", answers)
+
+    resp = client.get("/company/MSFT/brief")
+    assert resp.status_code == 200
+    assert resp.json()["answer"] == "cached answer"
+    assert answers == [], "an unchanged filing must not trigger a new analysis"
+
+
+def test_brief_regenerates_when_a_newer_10k_is_filed(client, monkeypatch):
+    """The regression: a brief pinned to a superseded filing, served forever."""
+    from main import DEFAULT_QUESTION
+    _seed_brief(DEFAULT_QUESTION, "2025-06-30")
+    answers = []
+    _patch_brief_boundaries(monkeypatch, "2026-06-30", answers)
+
+    resp = client.get("/company/MSFT/brief")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["answer"] == "freshly generated"
+    assert body["report_date"] == "2026-06-30"
+    assert len(answers) == 1
+
+
+def test_brief_refresh_forces_regeneration(client, monkeypatch):
+    from main import DEFAULT_QUESTION
+    _seed_brief(DEFAULT_QUESTION, "2025-06-30")
+    answers = []
+    _patch_brief_boundaries(monkeypatch, "2025-06-30", answers)
+
+    resp = client.get("/company/MSFT/brief?refresh=true")
+    assert resp.status_code == 200
+    assert resp.json()["answer"] == "freshly generated"
+    assert len(answers) == 1
+
+
+def test_brief_still_served_when_freshness_check_fails(client, monkeypatch):
+    """If the SEC is unreachable, a cached brief beats no brief at all."""
+    from main import DEFAULT_QUESTION
+    _seed_brief(DEFAULT_QUESTION, "2025-06-30")
+    answers = []
+    _patch_brief_boundaries(monkeypatch, "2025-06-30", answers)
+    monkeypatch.setattr("main.find_latest_10k", _sec_down)
+
+    resp = client.get("/company/MSFT/brief")
+    assert resp.status_code == 200
+    assert resp.json()["answer"] == "cached answer"
+    assert answers == []

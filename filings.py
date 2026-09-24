@@ -28,7 +28,9 @@ WHY WE TAKE THE LONGEST SPAN
     guessing at position.
 """
 
+import logging
 import re
+import time
 import warnings
 
 import requests
@@ -41,6 +43,21 @@ ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{docume
 
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+
+logger = logging.getLogger(__name__)
+
+# A company files one 10-K a year, so "which is the latest" is close to
+# immutable. It is checked on every cached brief to decide whether that brief
+# is still answering the current filing, and without a cache that freshness
+# check would cost an SEC round trip on the hot path of every request.
+LATEST_10K_TTL_SECONDS = 3600
+
+_latest_10k_cache: dict[str, tuple[float, dict | None]] = {}
+
+
+def clear_filing_caches() -> None:
+    """Drop cached filing metadata. Used by tests to isolate cases."""
+    _latest_10k_cache.clear()
 
 def _loose(phrase: str) -> re.Pattern:
     """Build a regex matching a phrase with arbitrary whitespace anywhere.
@@ -61,20 +78,31 @@ def find_latest_10k(cik: str) -> dict | None:
     we find the indices of 10-K forms and take the first (most recent).
 
     Returns a dict with url, filing_date, report_date, and accession.
+
+    Cached for LATEST_10K_TTL_SECONDS. Only successful lookups are cached; a
+    failure raises and is not remembered, so an SEC outage does not pin this
+    company to "no filing" for the life of the process.
     """
+    hit = _latest_10k_cache.get(cik)
+    if hit is not None:
+        fetched_at, filing = hit
+        if time.monotonic() - fetched_at < LATEST_10K_TTL_SECONDS:
+            return filing
+
     resp = requests.get(SUBMISSIONS_URL.format(cik=cik), headers=HEADERS, timeout=30)
     resp.raise_for_status()
     recent = resp.json()["filings"]["recent"]
 
     indices = [i for i, form in enumerate(recent["form"]) if form == "10-K"]
     if not indices:
+        _latest_10k_cache[cik] = (time.monotonic(), None)
         return None
 
     i = indices[0]
     # Accession numbers carry dashes in the API but not in archive URL paths.
     accession = recent["accessionNumber"][i].replace("-", "")
 
-    return {
+    filing = {
         "url": ARCHIVE_URL.format(
             cik=cik.lstrip("0"),
             accession=accession,
@@ -84,6 +112,8 @@ def find_latest_10k(cik: str) -> dict | None:
         "report_date": recent["reportDate"][i],
         "accession": recent["accessionNumber"][i],
     }
+    _latest_10k_cache[cik] = (time.monotonic(), filing)
+    return filing
 
 
 def fetch_clean_text(url: str) -> str:
