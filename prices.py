@@ -26,6 +26,7 @@ WHY THIS CACHE IS HAND-ROLLED RATHER THAN @lru_cache
 
 import logging
 
+import timing
 from cache import TTLCache
 
 logger = logging.getLogger(__name__)
@@ -71,7 +72,8 @@ def get_price(ticker: str) -> dict | None:
         return cached
 
     try:
-        data = _fetch_price(ticker)
+        with timing.stage("price"):
+            data = _fetch_price(ticker)
     except Exception as exc:
         # yfinance is unofficial and fails in many shapes - HTTP errors, JSON
         # decode errors, schema changes. Log the cause rather than swallowing

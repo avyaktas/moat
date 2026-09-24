@@ -39,6 +39,7 @@ import requests
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+import timing
 from database import SessionLocal
 from models import Company, Financials
 
@@ -244,21 +245,24 @@ def ingest_company(ticker: str, sector: str | None = None) -> int:
     a difference in case into a unique-constraint 500.
     """
     ticker = ticker.upper()
-    cik, name = get_cik(ticker)
-    facts = fetch_company_facts(cik)
+    with timing.stage("edgar.cik"):
+        cik, name = get_cik(ticker)
+    with timing.stage("edgar.facts"):
+        facts = fetch_company_facts(cik)
 
-    series = {}
-    for key, tags in FLOW_TAGS.items():
-        # Standalone quarters, then fill cumulative filers' interim Q2/Q3 by
-        # differencing the YTD chain, then derive the fourth quarter.
-        quarterly = extract_quarterly(facts, tags)
-        quarterly = derive_interim_quarters(quarterly, extract_ytd(facts, tags))
-        series[key] = derive_q4(quarterly, extract_annual(facts, tags))
-    for key, tags in SNAPSHOT_TAGS.items():
-        series[key] = extract_quarterly(facts, tags)
-    all_periods = set()
-    for s in series.values():
-        all_periods.update(s.keys())
+    with timing.stage("edgar.extract"):
+        series = {}
+        for key, tags in FLOW_TAGS.items():
+            # Standalone quarters, then fill cumulative filers' interim Q2/Q3 by
+            # differencing the YTD chain, then derive the fourth quarter.
+            quarterly = extract_quarterly(facts, tags)
+            quarterly = derive_interim_quarters(quarterly, extract_ytd(facts, tags))
+            series[key] = derive_q4(quarterly, extract_annual(facts, tags))
+        for key, tags in SNAPSHOT_TAGS.items():
+            series[key] = extract_quarterly(facts, tags)
+        all_periods = set()
+        for s in series.values():
+            all_periods.update(s.keys())
 
     db: Session = SessionLocal()
     try:
@@ -301,7 +305,8 @@ def ingest_company(ticker: str, sector: str | None = None) -> int:
             db.execute(stmt)
             processed += 1
 
-        db.commit()
+        with timing.stage("db.financials_write"):
+            db.commit()
         return processed
     finally:
         db.close()

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import ratelimit
+import timing
 from analysis import answer_question
 from config import settings
 from database import get_db
@@ -563,6 +564,20 @@ def get_report(request: Request, response: Response, ticker: TickerPath,
     # cache miss or stale: build it
     logger.info("report cache miss for %s (refresh=%s): rebuilding",
                 company.ticker, refresh)
+    build = timing.current()
+    if build is None:
+        # No enclosing breakdown (the JSON endpoint called directly). Open one
+        # so an uncached build always reports where its time went.
+        with timing.track(f"report {company.ticker}"):
+            return _build_report(request, response, company, refresh, db)
+    return _build_report(request, response, company, refresh, db)
+
+
+def _build_report(request: Request, response: Response, company: Company,
+                   refresh: bool, db: Session):
+    """Build an uncached report. Split out so the timing breakdown opened
+    by get_report wraps exactly the work, and nothing else.
+    """
     # Newest first, then limited - so this takes the most recent quarters,
     # which is the order build_report_data documents that it needs.
     rows = (
@@ -573,7 +588,9 @@ def get_report(request: Request, response: Response, ticker: TickerPath,
         .all()
     )
 
-    data = build_report_data(rows, get_price(company.ticker))
+    price = get_price(company.ticker)
+    with timing.stage("metrics"):
+        data = build_report_data(rows, price)
     if "error" in data:
         raise HTTPException(status_code=404, detail=data["error"])
 
@@ -582,7 +599,8 @@ def get_report(request: Request, response: Response, ticker: TickerPath,
     if filing:
         for attempt in range(SYNTHESIS_ATTEMPTS):
             try:
-                narrative = synthesize(data, filing["text"], company.name)
+                with timing.stage("synthesis"):
+                    narrative = synthesize(data, filing["text"], company.name)
                 break
             except (APIError, SynthesisError) as exc:
                 # APIError, not APIStatusError. APIConnectionError and
@@ -635,8 +653,9 @@ def get_report(request: Request, response: Response, ticker: TickerPath,
             set_={"payload": payload_json,
                   "generated_at": now},
         )
-        db.execute(stmt)
-        db.commit()
+        with timing.stage("db.report_write"):
+            db.execute(stmt)
+            db.commit()
 
     payload["cache"] = {"cached": False, "generated_at": now.isoformat()}
     if narrative is not None:
@@ -646,6 +665,7 @@ def get_report(request: Request, response: Response, ticker: TickerPath,
         # retries. Letting a client cache it would defeat exactly that.
         response.headers["Cache-Control"] = "no-store"
     return payload
+
 
 @app.get("/company/{ticker}/report/view", response_class=HTMLResponse)
 def get_report_view(request: Request, response: Response, ticker: TickerPath,

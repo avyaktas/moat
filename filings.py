@@ -35,6 +35,7 @@ import warnings
 import requests
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
+import timing
 from cache import TTLCache
 
 HEADERS = {"User-Agent": "Avyakta Sharma avyaktansharma@gmail.com"}
@@ -195,8 +196,10 @@ def get_risk_factors(cik: str) -> dict | None:
     if _risk_factors_cache.has(key):
         return _risk_factors_cache.get(key)
 
-    text = fetch_clean_text(filing["url"])
-    section = extract_section(text, "ITEM 1A RISK FACTORS", "ITEM 1B")
+    with timing.stage("edgar.filing_download"):
+        text = fetch_clean_text(filing["url"])
+    with timing.stage("edgar.filing_extract"):
+        section = extract_section(text, "ITEM 1A RISK FACTORS", "ITEM 1B")
     if section is None:
         # Cache the miss too. Re-downloading 8MB on every request to rediscover
         # that this filer uses non-standard headings helps nobody.
