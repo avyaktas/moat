@@ -30,11 +30,12 @@ WHY WE TAKE THE LONGEST SPAN
 
 import logging
 import re
-import time
 import warnings
 
 import requests
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+
+from cache import TTLCache
 
 HEADERS = {"User-Agent": "Avyakta Sharma avyaktansharma@gmail.com"}
 
@@ -52,12 +53,28 @@ logger = logging.getLogger(__name__)
 # check would cost an SEC round trip on the hot path of every request.
 LATEST_10K_TTL_SECONDS = 3600
 
-_latest_10k_cache: dict[str, tuple[float, dict | None]] = {}
+# The Risk Factors text is the expensive one. Fetching it means downloading
+# roughly 8MB of inline-XBRL HTML and parsing it with BeautifulSoup, and both
+# /brief and /report did that independently on every cache miss. It is also
+# the most cacheable thing here: a 10-K does not change after it is filed.
+#
+# Entries are large - around 70KB of extracted text each - so this is capped
+# tightly. 64 companies is far more than this service sees concurrently, and
+# bounds the worst case at a few megabytes rather than at however many tickers
+# someone cares to enumerate.
+FILING_TEXT_TTL_SECONDS = 6 * 3600
+FILING_TEXT_MAX_ENTRIES = 64
+
+_latest_10k_cache = TTLCache(ttl_seconds=LATEST_10K_TTL_SECONDS, max_entries=512)
+_risk_factors_cache = TTLCache(
+    ttl_seconds=FILING_TEXT_TTL_SECONDS, max_entries=FILING_TEXT_MAX_ENTRIES
+)
 
 
 def clear_filing_caches() -> None:
-    """Drop cached filing metadata. Used by tests to isolate cases."""
+    """Drop cached filing metadata and text. Used by tests to isolate cases."""
     _latest_10k_cache.clear()
+    _risk_factors_cache.clear()
 
 def _loose(phrase: str) -> re.Pattern:
     """Build a regex matching a phrase with arbitrary whitespace anywhere.
@@ -83,11 +100,8 @@ def find_latest_10k(cik: str) -> dict | None:
     failure raises and is not remembered, so an SEC outage does not pin this
     company to "no filing" for the life of the process.
     """
-    hit = _latest_10k_cache.get(cik)
-    if hit is not None:
-        fetched_at, filing = hit
-        if time.monotonic() - fetched_at < LATEST_10K_TTL_SECONDS:
-            return filing
+    if _latest_10k_cache.has(cik):
+        return _latest_10k_cache.get(cik)
 
     resp = requests.get(SUBMISSIONS_URL.format(cik=cik), headers=HEADERS, timeout=30)
     resp.raise_for_status()
@@ -95,7 +109,9 @@ def find_latest_10k(cik: str) -> dict | None:
 
     indices = [i for i, form in enumerate(recent["form"]) if form == "10-K"]
     if not indices:
-        _latest_10k_cache[cik] = (time.monotonic(), None)
+        # A genuine "this company has never filed a 10-K" is worth caching;
+        # it is an answer, not a failure.
+        _latest_10k_cache.set(cik, None)
         return None
 
     i = indices[0]
@@ -112,7 +128,7 @@ def find_latest_10k(cik: str) -> dict | None:
         "report_date": recent["reportDate"][i],
         "accession": recent["accessionNumber"][i],
     }
-    _latest_10k_cache[cik] = (time.monotonic(), filing)
+    _latest_10k_cache.set(cik, filing)
     return filing
 
 
@@ -165,23 +181,37 @@ def get_risk_factors(cik: str) -> dict | None:
     Returns a dict with the section text plus filing metadata, or None if
     no 10-K exists or the section could not be located (some filers use
     non-standard headings; an honest None beats a wrong slice).
+
+    Cached on the filing's accession number rather than on the CIK, so a
+    newly filed 10-K is a cache miss by construction: the key changes when
+    the document does, and there is no window where a stale section is served
+    for a filing that has been superseded.
     """
     filing = find_latest_10k(cik)
     if filing is None:
         return None
 
+    key = filing["accession"]
+    if _risk_factors_cache.has(key):
+        return _risk_factors_cache.get(key)
+
     text = fetch_clean_text(filing["url"])
     section = extract_section(text, "ITEM 1A RISK FACTORS", "ITEM 1B")
     if section is None:
+        # Cache the miss too. Re-downloading 8MB on every request to rediscover
+        # that this filer uses non-standard headings helps nobody.
+        _risk_factors_cache.set(key, None)
         return None
 
-    return {
+    result = {
         "section": "Risk Factors",
         "text": section,
         "url": filing["url"],
         "filing_date": filing["filing_date"],
         "report_date": filing["report_date"],
     }
+    _risk_factors_cache.set(key, result)
+    return result
 
 
 if __name__ == "__main__":

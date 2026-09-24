@@ -25,7 +25,8 @@ WHY THIS CACHE IS HAND-ROLLED RATHER THAN @lru_cache
 """
 
 import logging
-import time
+
+from cache import TTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 # that a valuation multiple is never built on a badly stale price.
 PRICE_TTL_SECONDS = 900  # 15 minutes
 
-_cache: dict[str, tuple[float, dict]] = {}
+_cache = TTLCache(ttl_seconds=PRICE_TTL_SECONDS, max_entries=512)
 
 
 def clear_price_cache() -> None:
@@ -65,11 +66,9 @@ def get_price(ticker: str) -> dict | None:
     """
     ticker = ticker.upper()
 
-    hit = _cache.get(ticker)
-    if hit is not None:
-        fetched_at, data = hit
-        if time.monotonic() - fetched_at < PRICE_TTL_SECONDS:
-            return data
+    cached = _cache.get(ticker)
+    if cached is not None:
+        return cached
 
     try:
         data = _fetch_price(ticker)
@@ -85,5 +84,5 @@ def get_price(ticker: str) -> dict | None:
         logger.info("no price available for %s", ticker)
         return None
 
-    _cache[ticker] = (time.monotonic(), data)
+    _cache.set(ticker, data)
     return data

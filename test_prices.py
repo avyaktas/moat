@@ -81,6 +81,8 @@ def test_exception_does_not_propagate():
 
 def test_cache_expires(monkeypatch):
     """A price frozen for the process lifetime is a stale valuation."""
+    import cache
+
     calls = []
 
     def counting(ticker):
@@ -88,7 +90,8 @@ def test_cache_expires(monkeypatch):
         return _ok(ticker)
 
     now = [1000.0]
-    monkeypatch.setattr(prices.time, "monotonic", lambda: now[0])
+    # The clock now lives in the shared TTLCache rather than in prices.
+    monkeypatch.setattr(cache.time, "monotonic", lambda: now[0])
     prices._fetch_price = counting
 
     prices.get_price("MSFT")
