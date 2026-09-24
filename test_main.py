@@ -613,3 +613,76 @@ def test_health_actually_queries_the_database(client):
         assert "SELECT 1" in executed[0]
     finally:
         real_app.dependency_overrides.pop(real_get_db, None)
+
+
+# --- bounding the untrusted inputs ---
+#
+# ?question= went straight into a Text column carrying a unique btree index.
+# Postgres caps a btree entry at 2704 bytes, and long random text does not
+# compress, so a sufficiently long question raised
+#   index row size 3016 exceeds btree version 4 maximum 2704
+# as an unhandled 500. Verified empirically against the real schema.
+
+import secrets
+import string
+
+RANDOM_ALPHABET = string.ascii_letters + string.digits
+
+
+def _incompressible(n: int) -> str:
+    return "".join(secrets.choice(RANDOM_ALPHABET) for _ in range(n))
+
+
+def test_over_long_question_is_rejected_not_500(client):
+    resp = client.get("/company/MSFT/brief", params={"question": _incompressible(3000)})
+    assert resp.status_code == 422, (
+        f"expected a validation rejection, got {resp.status_code} - an "
+        "over-long question reaches the btree index and raises"
+    )
+
+
+def test_question_at_the_limit_is_accepted(client, monkeypatch):
+    """The cap must not be so tight that real questions bounce."""
+    monkeypatch.setattr(analysis, "answer_question", _fake_answer)
+    monkeypatch.setattr("main.answer_question", _fake_answer)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.get_cik", lambda ticker: ("789019", "Microsoft"))
+
+    resp = client.get("/company/MSFT/brief", params={"question": "a" * 500})
+    assert resp.status_code == 200
+
+
+def test_ordinary_question_still_works(client, monkeypatch):
+    monkeypatch.setattr(analysis, "answer_question", _fake_answer)
+    monkeypatch.setattr("main.answer_question", _fake_answer)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.get_cik", lambda ticker: ("789019", "Microsoft"))
+
+    resp = client.get("/company/MSFT/brief",
+                      params={"question": "What are the main competitive risks?"})
+    assert resp.status_code == 200
+
+
+def test_absurd_ticker_is_rejected_at_the_edge(client):
+    resp = client.get("/company/" + "A" * 200)
+    assert resp.status_code == 422
+
+
+def test_ticker_with_control_characters_is_rejected(client):
+    resp = client.get("/company/AB%00CD")
+    assert resp.status_code in (404, 422)
+
+
+def test_real_tickers_with_dots_and_dashes_still_work(client, monkeypatch):
+    """BRK.B and BF-B are real tickers; the pattern must not exclude them."""
+    seen = []
+
+    def _capture(t):
+        seen.append(t)
+        raise ValueError(f"Unknown ticker: {t}")
+
+    monkeypatch.setattr("main.ingest_company", _capture)
+    for ticker in ("BRK.B", "BF-B"):
+        resp = client.get(f"/company/{ticker}")
+        assert resp.status_code == 404, f"{ticker} was rejected by the pattern"
+    assert seen == ["BRK.B", "BF-B"]

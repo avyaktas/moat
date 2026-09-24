@@ -1,6 +1,8 @@
 # owns endpoints
 
-from fastapi import FastAPI, Depends, HTTPException, Request
+from typing import Annotated
+
+from fastapi import FastAPI, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy import text
@@ -33,6 +35,14 @@ from serialization import to_jsonable
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# Real tickers are short and alphanumeric, allowing the dot and dash that
+# appear in class shares (BRK.B, BF-B). Bounding the shape here rejects junk
+# at the edge, before it costs a database round trip or an SEC lookup, and
+# keeps unbounded user input out of the path entirely.
+TickerPath = Annotated[
+    str, Path(min_length=1, max_length=10, pattern=r"^[A-Za-z0-9.\-]+$")
+]
 
 def get_or_ingest_company(ticker: str, db: Session) -> Company:
     """Retur the company, ingesting it on first request.
@@ -146,12 +156,12 @@ def list_companies(db: Session = Depends(get_db)):
     ]
 
 @app.get("/company/{ticker}")
-def get_ticker(ticker: str, db: Session = Depends(get_db)):
+def get_ticker(ticker: TickerPath, db: Session = Depends(get_db)):
     company = get_or_ingest_company(ticker, db)
     return {"id": company.id, "ticker": company.ticker, "name": company.name, "sector": company.sector}
 
 @app.get("/company/{ticker}/financials")
-def get_financials(ticker: str, db: Session = Depends(get_db)):
+def get_financials(ticker: TickerPath, db: Session = Depends(get_db)):
     company = get_or_ingest_company(ticker, db)
     rows = (
         db.query(Financials)
@@ -172,7 +182,7 @@ def get_financials(ticker: str, db: Session = Depends(get_db)):
 ]
 
 @app.get("/company/{ticker}/metrics")
-def get_metrics(ticker: str, db: Session = Depends(get_db)):
+def get_metrics(ticker: TickerPath, db: Session = Depends(get_db)):
     company = get_or_ingest_company(ticker, db)
     rows = (
         db.query(Financials)
@@ -211,6 +221,15 @@ def get_metrics(ticker: str, db: Session = Depends(get_db)):
 
 DEFAULT_QUESTION = "What are the most significant risks this company identifies, and how does it describe them?"
 
+# Long enough for any real question, and far below the ~2704-byte ceiling
+# Postgres puts on a btree entry. question is part of uq_company_question, and
+# an unbounded value that does not compress raises
+#   index row size 3016 exceeds btree version 4 maximum 2704
+# as an unhandled 500 - reachable by anyone, with a long enough query string.
+MAX_QUESTION_LENGTH = 500
+
+QuestionQuery = Annotated[str, Query(max_length=MAX_QUESTION_LENGTH)]
+
 
 def _brief_is_current(ticker: str, cached: Brief) -> bool:
     """True if a cached brief was written against the company's newest 10-K.
@@ -239,7 +258,7 @@ def _brief_is_current(ticker: str, cached: Brief) -> bool:
 
 
 @app.get("/company/{ticker}/brief")
-def get_brief(ticker: str, question: str = DEFAULT_QUESTION,
+def get_brief(ticker: TickerPath, question: QuestionQuery = DEFAULT_QUESTION,
               refresh: bool = False, db: Session = Depends(get_db)):
     company = get_or_ingest_company(ticker, db)
 
@@ -324,7 +343,7 @@ REPORT_MAX_AGE = timedelta(days=7)
 SYNTHESIS_ATTEMPTS = 2
 SYNTHESIS_BACKOFF_SECONDS = 3
 @app.get("/company/{ticker}/report")
-def get_report(ticker: str, refresh: bool = False, db: Session = Depends(get_db)):
+def get_report(ticker: TickerPath, refresh: bool = False, db: Session = Depends(get_db)):
     company = get_or_ingest_company(ticker, db)
 
     cached = (
@@ -417,7 +436,7 @@ def get_report(ticker: str, refresh: bool = False, db: Session = Depends(get_db)
     return payload
 
 @app.get("/company/{ticker}/report/view", response_class=HTMLResponse)
-def get_report_view(ticker: str, refresh: bool = False, db: Session = Depends(get_db)):
+def get_report_view(ticker: TickerPath, refresh: bool = False, db: Session = Depends(get_db)):
     """The same report, rendered as a readable tearsheet."""
     report = get_report(ticker, refresh=refresh, db=db)
     return render_report(report)
