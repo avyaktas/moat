@@ -829,93 +829,158 @@ def render_report(report: dict) -> str:
 
 
 def render_landing() -> str:
-    """The front door: a wordmark, a line about what this is, and a ticker box
-    that sends you straight to a tearsheet. No framework, no build step - the
-    only script is a few lines to uppercase the input and build the URL."""
+    """The front door: a wordmark, one line of what this is, and a ticker box.
+
+    No framework and no build step. The only script focuses the field, binds
+    "/" the way every search-first product does, and keeps the last few
+    tickers in localStorage so the second visit is one click rather than
+    retyping.
+    """
     css = """
-      .land { min-height: 100vh; display: flex; flex-direction: column; }
-      .land-main { flex: 1; width: 100%; max-width: 46rem;
-                   margin: 0 auto; padding: 13vh 2rem 4rem; }
-      .land .eyebrow {
-        font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
-        letter-spacing: 0.16em; text-transform: uppercase;
-        color: var(--ink-soft); margin: 0 0 1.5rem;
+      .wrap { min-height: 100vh; display: flex; flex-direction: column; }
+      .land-main {
+        flex: 1; width: 100%; max-width: 560px; margin: 0 auto;
+        padding: 18vh var(--s5) var(--s7); 
       }
-      .land h1 {
-        font-family: 'Instrument Serif', Georgia, serif; font-weight: 400;
-        font-size: clamp(4.5rem, 17vw, 9.5rem); line-height: 0.84;
-        letter-spacing: -0.02em; margin: 0;
+      .brand {
+        display: flex; align-items: center; gap: var(--s3);
+        margin: 0 0 var(--s6);
       }
-      .land .lede {
-        font-size: 1.15rem; color: var(--ink-soft);
-        max-width: 33rem; margin: 1.75rem 0 3rem;
+      .brand-mark {
+        width: 30px; height: 30px; border-radius: 8px; flex: none;
+        background: var(--text); position: relative;
       }
-      form.search { display: flex; gap: 0.6rem; max-width: 30rem; }
-      form.search input {
-        flex: 1; font: inherit; font-size: 1.1rem; color: var(--ink);
-        background: transparent; border: none; border-bottom: 2px solid var(--ink);
-        padding: 0.65rem 0.2rem; letter-spacing: 0.06em;
+      .brand-mark::after {
+        content: ''; position: absolute; inset: 9px 9px auto 9px; height: 3px;
+        background: var(--bg); border-radius: 2px;
+        box-shadow: 0 6px 0 var(--bg);
       }
-      form.search input::placeholder { color: var(--unknown); letter-spacing: 0; }
-      form.search input:focus { outline: none; border-color: var(--hold); }
-      form.search button {
-        font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
-        letter-spacing: 0.14em; text-transform: uppercase;
-        color: var(--paper); background: var(--ink); border: none;
-        padding: 0 1.5rem; cursor: pointer; transition: background 150ms ease;
+      .brand-name {
+        font-size: 1.15rem; font-weight: 600; letter-spacing: -0.015em;
       }
-      form.search button:hover { background: var(--hold); }
-      .searching {
-        margin: 0.9rem 0 0; min-height: 1.2rem;
-        font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
-        letter-spacing: 0.08em; color: var(--hold);
+      h1 {
+        font-size: clamp(2rem, 5vw, 2.6rem); line-height: 1.12;
+        letter-spacing: -0.03em; font-weight: 600; margin: 0 0 var(--s4);
       }
-      form.search button:disabled { background: var(--hold); cursor: default; }
-      form.search input:disabled { color: var(--ink-soft); }
-      .examples {
-        margin-top: 1.9rem; font-family: 'JetBrains Mono', monospace;
-        font-size: 0.75rem; letter-spacing: 0.06em; color: var(--ink-soft);
+      .lede {
+        font-size: 1rem; color: var(--text-muted); margin: 0 0 var(--s6);
+        max-width: 46ch;
       }
-      .examples a {
-        text-decoration: none; border-bottom: 1px solid var(--rule);
-        padding-bottom: 1px; margin-left: 0.85rem;
+
+      form.search { position: relative; }
+      .field {
+        display: flex; align-items: center; gap: var(--s2);
+        background: var(--surface); border: 1px solid var(--border-strong);
+        border-radius: var(--radius); padding: 0 var(--s2) 0 var(--s4);
+        transition: border-color 140ms ease, box-shadow 140ms ease;
       }
-      .examples a:hover { border-color: var(--ink); color: var(--ink); }
-      .land footer {
-        width: 100%; max-width: 46rem; margin: 0 auto;
-        padding: 1.5rem 2rem 3rem; border-top: 1px solid var(--rule);
-        font-size: 0.78rem; color: var(--ink-soft);
+      .field:focus-within {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
       }
-      .land footer p { margin: 0.3rem 0; }
-      .land footer .disclaimer { font-style: italic; margin-top: 0.6rem; }
-      @media (max-width: 40rem) {
-        .land-main { padding: 8vh 1.25rem 3rem; }
-        form.search { flex-wrap: wrap; }
-        form.search button { padding: 0.7rem 1.5rem; }
+      .field svg { flex: none; color: var(--text-subtle); }
+      .field input {
+        flex: 1; font: inherit; font-size: 1rem; font-weight: 500;
+        letter-spacing: 0.04em; color: var(--text); background: transparent;
+        border: none; outline: none; padding: 14px 0; min-width: 0;
+      }
+      .field input::placeholder {
+        color: var(--text-subtle); letter-spacing: 0; font-weight: 400;
+      }
+      .slash {
+        flex: none; font-size: 0.72rem; color: var(--text-subtle);
+        border: 1px solid var(--border); border-radius: var(--radius-sm);
+        padding: 2px 7px; line-height: 1.5;
+      }
+      .field button {
+        flex: none; font: inherit; font-size: 0.85rem; font-weight: 550;
+        color: var(--accent-text); background: var(--accent); border: none;
+        border-radius: var(--radius-sm); padding: 9px var(--s4);
+        cursor: pointer; transition: opacity 140ms ease;
+      }
+      .field button:hover { opacity: 0.88; }
+      .field button:disabled { opacity: 0.6; cursor: default; }
+
+      .status {
+        margin: var(--s3) 0 0; min-height: 1.2em; font-size: 0.85rem;
+        color: var(--accent);
+      }
+
+      .row {
+        display: flex; align-items: center; gap: var(--s2);
+        flex-wrap: wrap; margin-top: var(--s5);
+        font-size: 0.85rem; color: var(--text-subtle);
+      }
+      .row .label { margin-right: var(--s1); }
+      .chip {
+        text-decoration: none; color: var(--text-muted);
+        border: 1px solid var(--border); border-radius: 999px;
+        padding: 4px 11px; font-weight: 500; letter-spacing: 0.02em;
+        transition: border-color 140ms ease, color 140ms ease,
+                    background 140ms ease;
+      }
+      .chip:hover {
+        color: var(--text); border-color: var(--border-strong);
+        background: var(--surface-2);
+      }
+      #recent-row[hidden] { display: none; }
+
+      footer {
+        width: 100%; max-width: 560px; margin: 0 auto;
+        padding: var(--s5) var(--s5) var(--s7);
+        font-size: 0.8rem; color: var(--text-subtle);
+      }
+      footer p { margin: var(--s1) 0; }
+      footer .disclaimer { margin-top: var(--s3); }
+
+      @media (max-width: 640px) {
+        .land-main { padding: 10vh var(--s4) var(--s6); }
+        footer { padding-left: var(--s4); padding-right: var(--s4); }
       }
     """
     body = """
-    <div class="land">
+    <div class="wrap">
       <main class="land-main">
-        <p class="eyebrow">Moat · Filing analysis</p>
-        <h1>Moat</h1>
-        <p class="lede">Type any US-listed ticker for a grounded analyst report:
-           computed financials from SEC filings, a scorecard against value-investing
-           criteria, and the real risks pulled from the 10-K &mdash; every claim
-           checked against the source document.</p>
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">Moat</span>
+        </div>
+
+        <h1>Grounded analysis of any US-listed company.</h1>
+        <p class="lede">Computed financials from SEC filings, a scorecard
+           against value-investing criteria, and the real risks pulled from the
+           10-K &mdash; every claim checked against the source document.</p>
+
         <form class="search" role="search" onsubmit="return moatGo(event)">
-          <input id="t" name="t" placeholder="Ticker &mdash; e.g. MSFT"
-                 aria-label="Ticker" autocomplete="off" autocapitalize="characters"
-                 autocorrect="off" spellcheck="false">
-          <button type="submit" id="go">Analyze</button>
+          <div class="field">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+                 aria-hidden="true">
+              <circle cx="7" cy="7" r="4.6" stroke="currentColor"
+                      stroke-width="1.6"/>
+              <path d="M10.5 10.5L14 14" stroke="currentColor"
+                    stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+            <input id="t" name="t" placeholder="Search a ticker"
+                   aria-label="Ticker" autocomplete="off"
+                   autocapitalize="characters" autocorrect="off"
+                   spellcheck="false" maxlength="10">
+            <span class="slash" id="slash" aria-hidden="true">/</span>
+            <button type="submit" id="go">Analyze</button>
+          </div>
         </form>
-        <p class="searching" id="searching" aria-live="polite"></p>
-        <p class="examples">Try
-          <a href="/company/MSFT/report/view">MSFT</a>
-          <a href="/company/AAPL/report/view">AAPL</a>
-          <a href="/company/NVDA/report/view">NVDA</a>
-          <a href="/company/IBM/report/view">IBM</a>
-        </p>
+        <p class="status" id="searching" aria-live="polite"></p>
+
+        <div class="row" id="recent-row" hidden>
+          <span class="label">Recent</span>
+          <span id="recent"></span>
+        </div>
+        <div class="row">
+          <span class="label">Try</span>
+          <a class="chip" href="/company/MSFT/report/view">MSFT</a>
+          <a class="chip" href="/company/AAPL/report/view">AAPL</a>
+          <a class="chip" href="/company/NVDA/report/view">NVDA</a>
+          <a class="chip" href="/company/IBM/report/view">IBM</a>
+        </div>
       </main>
       <footer>
         <p>Fundamentals from SEC EDGAR &middot; price from yfinance.</p>
@@ -925,11 +990,59 @@ def render_landing() -> str:
     </div>
     <script>
       var inp = document.getElementById('t');
-      inp.addEventListener('input', function () { inp.value = inp.value.toUpperCase(); });
+      var slash = document.getElementById('slash');
+
+      inp.addEventListener('input', function () {
+        inp.value = inp.value.toUpperCase();
+      });
+      // The hint is only useful while the field is not focused.
+      inp.addEventListener('focus', function () { slash.style.opacity = '0'; });
+      inp.addEventListener('blur', function () { slash.style.opacity = ''; });
+
+      // "/" focuses search, the way every search-first product behaves.
+      // Ignored while typing somewhere else, so it stays a shortcut rather
+      // than a keystroke thief.
+      document.addEventListener('keydown', function (e) {
+        if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+        var el = document.activeElement;
+        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ||
+                   el.isContentEditable)) return;
+        e.preventDefault();
+        inp.focus();
+        inp.select();
+      });
+
+      var KEY = 'moat.recent';
+
+      function readRecent() {
+        try { return JSON.parse(localStorage.getItem(KEY)) || []; }
+        catch (err) { return []; }
+      }
+
+      function remember(ticker) {
+        try {
+          var list = readRecent().filter(function (x) { return x !== ticker; });
+          list.unshift(ticker);
+          localStorage.setItem(KEY, JSON.stringify(list.slice(0, 5)));
+        } catch (err) { /* private mode, or storage full - not worth failing */ }
+      }
+
+      function paintRecent() {
+        var list = readRecent();
+        if (!list.length) return;
+        document.getElementById('recent').innerHTML = list.map(function (t) {
+          return '<a class="chip" href="/company/' + encodeURIComponent(t) +
+                 '/report/view">' + t + '</a>';
+        }).join(' ');
+        document.getElementById('recent-row').hidden = false;
+      }
+      paintRecent();
+
       function moatGo(e) {
         e.preventDefault();
         var t = inp.value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '');
         if (!t) { inp.focus(); return false; }
+        remember(t);
         // Acknowledge the submit before navigating. The next page answers in
         // milliseconds, but "milliseconds" is not "immediately", and a button
         // that does nothing visible when pressed is the whole complaint.
@@ -942,9 +1055,11 @@ def render_landing() -> str:
         window.location.href = '/company/' + encodeURIComponent(t) + '/report/view';
         return false;
       }
+
+      inp.focus();
     </script>
     """
-    return _document("Moat · Filing analysis", body, css)
+    return _document("Moat \u00b7 Filing analysis", body, css)
 
 
 def render_not_found(detail: str) -> str:

@@ -560,3 +560,49 @@ def test_every_page_carries_the_tokens():
     assert "--accent" in render_landing()
     assert "--accent" in render_not_found("x")
     assert "--accent" in render_report_shell("NVDA")
+
+
+# --- search behaviour ---
+
+def test_search_autofocuses():
+    assert "inp.focus();" in render_landing()
+
+
+def test_slash_focuses_search():
+    """The shortcut every search-first product has."""
+    html = render_landing()
+    assert "keydown" in html
+    assert "e.key !== '/'" in html
+
+
+def test_slash_does_not_steal_keystrokes_while_typing():
+    html = render_landing()
+    assert "TEXTAREA" in html
+    assert "isContentEditable" in html
+
+
+def test_recent_searches_are_remembered():
+    html = render_landing()
+    assert "moat.recent" in html
+    assert "localStorage" in html
+
+
+def test_recent_searches_survive_private_mode():
+    """localStorage throws in some browsers; a search must not fail for it."""
+    html = render_landing()
+    assert "catch (err)" in html
+
+
+def test_recent_list_is_bounded():
+    assert "slice(0, 5)" in render_landing()
+
+
+def test_recent_row_is_hidden_until_there_is_something_in_it():
+    html = render_landing()
+    assert 'id="recent-row" hidden' in html
+
+
+def test_example_tickers_are_still_offered():
+    html = render_landing()
+    for ticker in ("MSFT", "AAPL", "NVDA", "IBM"):
+        assert f"/company/{ticker}/report/view" in html
