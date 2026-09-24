@@ -168,3 +168,35 @@ def test_report_survives_anthropic_outage(client, monkeypatch):
         assert db.query(Report).count() == 0
     finally:
         db.close()
+
+def test_report_not_cached_when_synthesis_returns_bad_json(client, monkeypatch):
+    """A model reply that will not parse must degrade, not freeze.
+
+    The previous guard was `if narrative is not None`, and the old failure
+    value was a truthy {"error": ...} dict - so an unparseable reply was
+    cached and served as NO VERDICT for the full 7-day TTL. This is the IBM
+    failure reached by a second route.
+    """
+    from report import SynthesisError
+
+    def _raise_bad_json(*a, **k):
+        raise SynthesisError("Model response was not valid JSON", raw="nonsense")
+
+    monkeypatch.setattr("main.get_cik", lambda ticker: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda ticker: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", _raise_bad_json)
+
+    resp = client.get("/company/MSFT/report")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["narrative"] is None
+    assert body["data"]["ttm"]["revenue"] == 100.0
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(Report).count() == 0
+    finally:
+        db.close()

@@ -145,6 +145,24 @@ def build_report_data(rows: list, price_data: dict | None) -> dict:
     }
 
 
+class SynthesisError(RuntimeError):
+    """Synthesis did not produce a usable narrative.
+
+    Raised rather than returned. The caller decides whether a report can be
+    served without a narrative, and it must not be able to confuse a failure
+    with a result: returning {"error": ...} meant main.py's
+    `if narrative is not None` cache guard saw a truthy value and persisted a
+    NO VERDICT report for the full 7-day TTL.
+
+    `raw` keeps the model's unparsed reply, which is the only thing worth
+    having when a response will not parse.
+    """
+
+    def __init__(self, message: str, raw: str | None = None):
+        super().__init__(message)
+        self.raw = raw
+
+
 SYNTHESIS_PROMPT = """You are analyzing a company as a business owner would - \
 someone buying a piece of a business to hold for five to ten years, not a trader \
 chasing momentum. Price and value are different things. A falling price is not a \
@@ -209,6 +227,9 @@ def synthesize(report_data: dict, filing_text: str, company_name: str,
     Returns the narrative plus per-quote verification, so the same grounding
     guarantee that applies to briefs applies here: a quote that is not in the
     filing was fabricated, and the code says so.
+
+    Raises SynthesisError if the model's reply will not parse. Failure is a
+    raise, never a return value, so the caller cannot cache it by accident.
     """
     from anthropic import Anthropic
 
@@ -243,7 +264,9 @@ def synthesize(report_data: dict, filing_text: str, company_name: str,
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError as e:
-        return {"error": f"Model response was not valid JSON: {e}", "raw": raw}
+        raise SynthesisError(
+            f"Model response was not valid JSON: {e}", raw=raw
+        ) from e
 
     # Verify every quote the model attached to a risk.
     risks = parsed.get("risks", [])

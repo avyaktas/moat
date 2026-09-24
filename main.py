@@ -9,7 +9,7 @@ from database import get_db
 from metrics import debt_to_equity, fcf_margin, net_margin, roe, ttm, roic
 from ingest import ingest_company
 from prices import get_price
-from report import build_report_data, synthesize
+from report import SynthesisError, build_report_data, synthesize
 from datetime import datetime, timedelta, timezone
 from views import render_report, render_landing, render_not_found
 import time
@@ -246,7 +246,7 @@ def get_report(ticker: str, refresh: bool = False, db: Session = Depends(get_db)
             try:
                 narrative = synthesize(data, filing["text"], company.name)
                 break
-            except APIStatusError:
+            except (APIStatusError, SynthesisError):
                 if attempt == 0:
                     time.sleep(3)         # brief pause, then retry once
                 # second failure: narrative stays None, report degrades

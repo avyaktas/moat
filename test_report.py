@@ -272,3 +272,51 @@ def test_synthesis_payload_preserves_nulls_as_json_null():
 
     assert parsed["ttm"]["revenue"] is None
     assert "None" not in figures
+
+
+# --- synthesis failure must be unmistakable ---
+#
+# synthesize used to RETURN {"error": ...} when the model's reply would not
+# parse. main.py guarded the cache write with `if narrative is not None`, and
+# that dict is not None - so a broken narrative was persisted and served as
+# NO VERDICT for the full 7-day TTL. Failure has to be a raise, so there is
+# exactly one way to fail and a caller cannot mistake it for a result.
+
+def test_synthesize_raises_on_unparseable_reply():
+    from report import SynthesisError
+
+    client = _CapturingClient("I'm afraid I can't help with that.")
+    try:
+        report_module.synthesize({"ttm": {}}, "filing text", "Test Co",
+                                 client=client)
+    except SynthesisError as e:
+        assert "raw" in str(e) or client.captured is not None
+    else:
+        raise AssertionError("synthesize returned instead of raising")
+
+
+def test_synthesize_error_is_not_a_dict_with_error_key():
+    """The specific regression: a truthy failure value reaching the caller."""
+    from report import SynthesisError
+
+    client = _CapturingClient("not json at all")
+    result = None
+    try:
+        result = report_module.synthesize({"ttm": {}}, "filing", "Co",
+                                          client=client)
+    except SynthesisError:
+        pass
+    assert result is None, (
+        "synthesize returned a value on failure; main.py's `narrative is not "
+        "None` guard would cache it"
+    )
+
+
+def test_synthesize_keeps_the_raw_reply_for_debugging():
+    from report import SynthesisError
+
+    client = _CapturingClient("```not json```")
+    try:
+        report_module.synthesize({"ttm": {}}, "filing", "Co", client=client)
+    except SynthesisError as e:
+        assert e.raw is not None
