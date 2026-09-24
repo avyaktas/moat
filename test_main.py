@@ -108,11 +108,29 @@ def test_brief_generates_and_caches(client, monkeypatch):
 
 
 def _fake_report_data(rows, price_data):
-    """Stand-in for build_report_data — valid computed figures, no DB rows needed."""
+    """Stand-in for build_report_data - valid computed figures, no DB rows.
+
+    Shaped like the real return value rather than the minimum the assertions
+    happen to touch. The response models added in schemas.py rejected the
+    earlier stub, correctly: it was missing financial_health and every
+    scorecard summary field, so it could never have been a real response. A
+    fake that cannot satisfy the contract the endpoint actually returns is a
+    fake that can hide a real bug.
+    """
     return {
         "as_of": "2025-06-30",
-        "ttm": {"revenue": 100.0, "net_income": 30.0, "net_margin": 0.30},
-        "scorecard": {"checks": [], "summary": {}, "valuation": {}},
+        "ttm": {
+            "revenue": 100.0, "net_income": 30.0, "free_cash_flow": 25.0,
+            "net_margin": 0.30, "fcf_margin": 0.25, "roe": 0.075,
+            "roic": 0.068, "revenue_growth": 0.0,
+        },
+        "price": None,
+        "scorecard": {
+            "checks": [],
+            "summary": {"passed": 0, "failed": 0, "unknown": 6, "evaluable": 0},
+            "financial_health": {"survivability": {"verdict": "Cannot assess"}},
+            "valuation": {"market_cap": None, "p_fcf": None, "p_e": None},
+        },
     }
 
 

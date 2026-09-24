@@ -27,6 +27,13 @@ from ingest import get_cik, ingest_company
 from logging_config import configure_logging
 from metrics import debt_to_equity, fcf_margin, net_margin, roe, roic, ttm
 from models import Brief, Company, Financials, Report
+from schemas import (
+    BriefOut,
+    CompanyOut,
+    FinancialsOut,
+    MetricsOut,
+    ReportOut,
+)
 from prices import get_price
 from report import SynthesisError, build_report_data, synthesize
 from serialization import to_jsonable
@@ -228,7 +235,7 @@ def read_health(db: Session = Depends(get_db)):
         )
     return {"status": "ok"}
 
-@app.get("/companies")
+@app.get("/companies", response_model=list[CompanyOut])
 def list_companies(
     limit: Annotated[int, Query(ge=1, le=MAX_COMPANIES_PAGE)] = DEFAULT_COMPANIES_PAGE,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -253,12 +260,12 @@ def list_companies(
         for r in rows
     ]
 
-@app.get("/company/{ticker}")
+@app.get("/company/{ticker}", response_model=CompanyOut)
 def get_ticker(ticker: TickerPath, db: Session = Depends(get_db)):
     company = get_or_ingest_company(ticker, db)
     return {"id": company.id, "ticker": company.ticker, "name": company.name, "sector": company.sector}
 
-@app.get("/company/{ticker}/financials")
+@app.get("/company/{ticker}/financials", response_model=list[FinancialsOut])
 def get_financials(ticker: TickerPath, db: Session = Depends(get_db)):
     company = get_or_ingest_company(ticker, db)
     rows = (
@@ -279,7 +286,7 @@ def get_financials(ticker: TickerPath, db: Session = Depends(get_db)):
     for r in rows
 ]
 
-@app.get("/company/{ticker}/metrics")
+@app.get("/company/{ticker}/metrics", response_model=MetricsOut)
 def get_metrics(ticker: TickerPath, db: Session = Depends(get_db)):
     company = get_or_ingest_company(ticker, db)
     rows = (
@@ -369,7 +376,7 @@ def _brief_is_current(ticker: str, cached: Brief) -> bool:
     return cached.report_date == latest["report_date"]
 
 
-@app.get("/company/{ticker}/brief")
+@app.get("/company/{ticker}/brief", response_model=BriefOut)
 def get_brief(request: Request, ticker: TickerPath,
               question: QuestionQuery = DEFAULT_QUESTION,
               refresh: bool = False, token: str | None = None,
@@ -509,7 +516,7 @@ def _cache_headers(etag: str) -> dict[str, str]:
 # than a third attempt's latency.
 SYNTHESIS_ATTEMPTS = 2
 SYNTHESIS_BACKOFF_SECONDS = 3
-@app.get("/company/{ticker}/report")
+@app.get("/company/{ticker}/report", response_model=ReportOut)
 def get_report(request: Request, response: Response, ticker: TickerPath,
                refresh: bool = False, token: str | None = None,
                db: Session = Depends(get_db)):

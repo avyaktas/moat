@@ -320,3 +320,53 @@ def test_synthesize_keeps_the_raw_reply_for_debugging():
         report_module.synthesize({"ttm": {}}, "filing", "Co", client=client)
     except SynthesisError as e:
         assert e.raw is not None
+
+
+# --- the declared response contract must match what is actually produced ---
+#
+# response_model filters as well as documents: a field absent from the model
+# is dropped from the response. So a model that drifts from what
+# build_report_data returns is silent data loss, not just stale docs.
+
+def test_real_report_data_satisfies_the_declared_response_model():
+    from schemas import ReportDataOut
+
+    data = build_report_data(_decimal_rows(8), {
+        "price": Decimal("512.30"), "market_cap": Decimal("3700000000000"),
+        "shares_outstanding": Decimal("7430000000"),
+    })
+    validated = ReportDataOut.model_validate(data)
+
+    # Nothing silently dropped on the way through.
+    assert validated.ttm.revenue == 400.0
+    assert validated.scorecard.summary.evaluable >= 1
+    assert validated.scorecard.valuation.market_cap == 3.7e12
+    assert validated.price is not None
+    assert "survivability" in validated.scorecard.financial_health
+
+
+def test_report_data_without_price_still_validates():
+    from schemas import ReportDataOut
+
+    validated = ReportDataOut.model_validate(build_report_data(_decimal_rows(8), None))
+    assert validated.price is None
+    assert validated.scorecard.valuation.p_e is None
+
+
+def test_report_data_with_no_metrics_still_validates():
+    """Every figure null is the honest-nulls case, and must serialize."""
+    from schemas import ReportDataOut
+
+    rows = [FakeRow(period_end=date(2026, 3, 31)) for _ in range(8)]
+    validated = ReportDataOut.model_validate(build_report_data(rows, None))
+    assert validated.ttm.revenue is None
+    assert validated.scorecard.summary.unknown == 6
+
+
+def test_every_scorecard_check_satisfies_the_check_model():
+    from schemas import CheckOut
+
+    data = build_report_data(_decimal_rows(8), None)
+    for check in data["scorecard"]["checks"]:
+        validated = CheckOut.model_validate(check)
+        assert validated.status in {"PASS", "FAIL", "UNKNOWN"}
