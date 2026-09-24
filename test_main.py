@@ -789,3 +789,128 @@ def test_normal_request_unaffected_when_token_is_configured(client, monkeypatch)
     monkeypatch.setattr("main.synthesize", lambda *a, **k: None)
 
     assert client.get("/company/MSFT/report").status_code == 200
+
+
+# --- query bounds ---
+#
+# build_report_data reads at most rows[:20] - four quarters for TTM, four more
+# for the prior-year comparison, twenty for the margin-stability history. The
+# endpoint loaded every quarter the company had ever filed.
+
+from datetime import date as _date
+
+from models import Financials
+
+
+def _seed_quarters(n: int):
+    db = TestingSessionLocal()
+    try:
+        company = db.query(Company).filter(Company.ticker == "MSFT").one()
+        for i in range(n):
+            year, month = 2026 - (i // 4), [3, 6, 9, 12][i % 4]
+            db.add(Financials(
+                company_id=company.id, period_end=_date(year, month, 28),
+                revenue=100, net_income=30, free_cash_flow=25,
+                total_debt=40, shareholders_equity=400,
+            ))
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_report_loads_only_the_quarters_it_uses(client, monkeypatch):
+    _seed_quarters(40)
+    seen = []
+
+    def _capture(rows, price_data):
+        seen.append(len(rows))
+        return _fake_report_data(rows, price_data)
+
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", lambda *a, **k: None)
+    monkeypatch.setattr("main.build_report_data", _capture)
+
+    client.get("/company/MSFT/report")
+    assert seen == [20], f"loaded {seen[0]} rows to read at most 20"
+
+
+def test_report_still_correct_with_fewer_quarters(client, monkeypatch):
+    """The limit must not change behaviour for a young company."""
+    _seed_quarters(3)
+    seen = []
+
+    def _capture(rows, price_data):
+        seen.append(len(rows))
+        return _fake_report_data(rows, price_data)
+
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", lambda *a, **k: None)
+    monkeypatch.setattr("main.build_report_data", _capture)
+
+    client.get("/company/MSFT/report")
+    assert seen == [3]
+
+
+def test_report_rows_are_newest_first(client, monkeypatch):
+    """build_report_data documents that rows arrive newest first; the LIMIT
+    must not silently hand it the oldest 20 instead."""
+    _seed_quarters(40)
+    seen = []
+
+    def _capture(rows, price_data):
+        seen.append([r.period_end for r in rows])
+        return _fake_report_data(rows, price_data)
+
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", lambda *a, **k: None)
+    monkeypatch.setattr("main.build_report_data", _capture)
+
+    client.get("/company/MSFT/report")
+    dates = seen[0]
+    assert dates == sorted(dates, reverse=True)
+    assert dates[0].year == 2026, "should be the most recent quarters, not the oldest"
+
+
+def _seed_companies(n: int):
+    db = TestingSessionLocal()
+    try:
+        for i in range(n):
+            db.add(Company(ticker=f"T{i:03d}", name=f"Company {i}"))
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_companies_is_paginated(client):
+    _seed_companies(30)
+    resp = client.get("/companies?limit=10")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 10
+
+
+def test_companies_offset_advances(client):
+    _seed_companies(30)
+    first = client.get("/companies?limit=5").json()
+    second = client.get("/companies?limit=5&offset=5").json()
+    assert [c["ticker"] for c in first] != [c["ticker"] for c in second]
+
+
+def test_companies_has_a_default_bound(client):
+    """An unbounded list endpoint is a slow query waiting to happen."""
+    _seed_companies(300)
+    resp = client.get("/companies")
+    assert len(resp.json()) <= 100
+
+
+def test_companies_ordering_is_stable(client):
+    """Pagination over an unordered query can repeat or skip rows."""
+    _seed_companies(30)
+    a = [c["ticker"] for c in client.get("/companies?limit=10").json()]
+    b = [c["ticker"] for c in client.get("/companies?limit=10").json()]
+    assert a == b

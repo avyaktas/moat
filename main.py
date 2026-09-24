@@ -112,6 +112,9 @@ TickerPath = Annotated[
     str, Path(min_length=1, max_length=10, pattern=r"^[A-Za-z0-9.\-]+$")
 ]
 
+DEFAULT_COMPANIES_PAGE = 100
+MAX_COMPANIES_PAGE = 500
+
 def get_or_ingest_company(ticker: str, db: Session) -> Company:
     """Retur the company, ingesting it on first request.
     Read through cache: known tickers are served from Postgres, 
@@ -224,8 +227,25 @@ def read_health(db: Session = Depends(get_db)):
     return {"status": "ok"}
 
 @app.get("/companies")
-def list_companies(db: Session = Depends(get_db)):
-    rows = db.query(Company).all()
+def list_companies(
+    limit: Annotated[int, Query(ge=1, le=MAX_COMPANIES_PAGE)] = DEFAULT_COMPANIES_PAGE,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    db: Session = Depends(get_db),
+):
+    """List known companies, newest-registered last.
+
+    Ordered by id and paginated. An unbounded list endpoint is a slow query
+    waiting for the table to grow, and paginating an unordered query can
+    repeat or skip rows between pages, since Postgres is under no obligation
+    to return them in the same order twice.
+    """
+    rows = (
+        db.query(Company)
+        .order_by(Company.id)
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )
     return [
         {"id": r.id, "ticker": r.ticker, "name": r.name, "sector": r.sector}
         for r in rows
@@ -303,6 +323,12 @@ DEFAULT_QUESTION = "What are the most significant risks this company identifies,
 #   index row size 3016 exceeds btree version 4 maximum 2704
 # as an unhandled 500 - reachable by anyone, with a long enough query string.
 MAX_QUESTION_LENGTH = 500
+
+# build_report_data reads at most rows[:20]: four quarters for TTM, four more
+# for the prior-year comparison, and twenty for the margin-stability history.
+# Loading every quarter a company ever filed to use the newest twenty is work
+# that grows forever while the answer never changes.
+REPORT_QUARTERS = 20
 
 QuestionQuery = Annotated[str, Query(max_length=MAX_QUESTION_LENGTH)]
 
@@ -446,10 +472,13 @@ def get_report(request: Request, ticker: TickerPath, refresh: bool = False,
             return payload
 
     # cache miss or stale: build it
+    # Newest first, then limited - so this takes the most recent quarters,
+    # which is the order build_report_data documents that it needs.
     rows = (
         db.query(Financials)
         .filter(Financials.company_id == company.id)
         .order_by(Financials.period_end.desc())
+        .limit(REPORT_QUARTERS)
         .all()
     )
 
