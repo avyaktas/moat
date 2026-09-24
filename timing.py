@@ -33,17 +33,31 @@ _current: contextvars.ContextVar["Timings | None"] = contextvars.ContextVar(
     "moat_timings", default=None
 )
 
+# How many stages are open on this thread. A worker inherits the caller's depth
+# through the copied context, so a fetch running inside the prefetch is
+# correctly recorded as nested rather than as a second top-level stage.
+_depth: contextvars.ContextVar[int] = contextvars.ContextVar("moat_depth", default=0)
+
 
 class Timings:
-    """Stage durations for one request, in the order they completed."""
+    """Stage durations for one request, in the order they completed.
+
+    Stages nest: the parallel prefetch contains the EDGAR and price fetches
+    that run inside it. Depth is recorded alongside each duration so the
+    breakdown can add up only the outermost ones - summing all of them would
+    double-count the nested work and make the unaccounted remainder look like
+    zero when it is really negative.
+    """
 
     def __init__(self, label: str = ""):
         self.label = label
         self.stages: list[tuple[str, float]] = []
+        self.depths: list[int] = []
         self.started = time.perf_counter()
 
-    def record(self, name: str, seconds: float) -> None:
+    def record(self, name: str, seconds: float, depth: int = 0) -> None:
         self.stages.append((name, seconds))
+        self.depths.append(depth)
 
     @property
     def total(self) -> float:
@@ -54,10 +68,18 @@ class Timings:
         return sum(s for n, s in self.stages if n == name)
 
     def breakdown(self) -> str:
-        """One line naming every stage and its share of the total."""
+        """One line naming every stage and its share of the total.
+
+        Nested stages are shown with a dot prefix so a reader can see that
+        they sit inside the stage above rather than beside it.
+        """
         total = self.total
-        parts = [f"{n}={s:.2f}s" for n, s in self.stages]
-        accounted = sum(s for _, s in self.stages)
+        parts = []
+        for (name, seconds), depth in zip(self.stages, self.depths, strict=True):
+            parts.append(f"{'.' * depth}{name}={seconds:.2f}s")
+        accounted = sum(
+            s for (_, s), d in zip(self.stages, self.depths, strict=True) if d == 0
+        )
         parts.append(f"other={max(0.0, total - accounted):.2f}s")
         return f"total={total:.2f}s " + " ".join(parts)
 
@@ -67,9 +89,11 @@ def track(label: str):
     """Open a per-request breakdown and log it on the way out."""
     timings = Timings(label)
     token = _current.set(timings)
+    depth_token = _depth.set(0)
     try:
         yield timings
     finally:
+        _depth.reset(depth_token)
         _current.reset(token)
         logger.info("timing %s | %s", label, timings.breakdown())
 
@@ -82,13 +106,16 @@ def stage(name: str):
     failed slowly is exactly the one worth seeing in the breakdown.
     """
     start = time.perf_counter()
+    depth = _depth.get()
+    token = _depth.set(depth + 1)
     try:
         yield
     finally:
+        _depth.reset(token)
         elapsed = time.perf_counter() - start
         timings = _current.get()
         if timings is not None:
-            timings.record(name, elapsed)
+            timings.record(name, elapsed, depth)
         logger.info("stage %s seconds=%.2f", name, elapsed)
 
 

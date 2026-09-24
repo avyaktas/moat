@@ -18,13 +18,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+import pipeline
 import ratelimit
 import timing
 from analysis import answer_question
 from config import settings
 from database import get_db
 from filings import find_latest_10k, get_risk_factors
-from ingest import get_cik, ingest_company
+from ingest import fetch_financials, get_cik, ingest_company, store_financials
 from logging_config import configure_logging
 from metrics import debt_to_equity, fcf_margin, net_margin, roe, roic, ttm
 from models import Brief, Company, Financials, Report
@@ -569,12 +570,19 @@ def get_report(request: Request, response: Response, ticker: TickerPath,
                db: Session = Depends(get_db)):
     _enforce_rate_limit(request)
     refresh = _refresh_requested(refresh, token)
-    company = get_or_ingest_company(ticker, db)
+
+    # Look the company up without ingesting. A ticker we have never seen has
+    # no cached report by definition, so there is nothing to check and no
+    # reason to pay for ingestion before finding that out - and when it is
+    # ingested, the fetch happens alongside the filing and price fetches
+    # rather than ahead of them.
+    ticker = ticker.upper()
+    company = db.query(Company).filter(Company.ticker == ticker).first()
 
     cached = (
-        db.query(Report)
-        .filter(Report.company_id == company.id)
-        .first()
+        db.query(Report).filter(Report.company_id == company.id).first()
+        if company is not None
+        else None
     )
     if cached is not None and not refresh:
         generated_at = _as_utc(cached.generated_at)
@@ -600,21 +608,63 @@ def get_report(request: Request, response: Response, ticker: TickerPath,
 
     # cache miss or stale: build it
     logger.info("report cache miss for %s (refresh=%s): rebuilding",
-                company.ticker, refresh)
-    build = timing.current()
-    if build is None:
+                ticker, refresh)
+    if timing.current() is None:
         # No enclosing breakdown (the JSON endpoint called directly). Open one
         # so an uncached build always reports where its time went.
-        with timing.track(f"report {company.ticker}"):
-            return _build_report(request, response, company, refresh, db)
-    return _build_report(request, response, company, refresh, db)
+        with timing.track(f"report {ticker}"):
+            return _build_report(request, response, ticker, company, refresh, db)
+    return _build_report(request, response, ticker, company, refresh, db)
 
 
-def _build_report(request: Request, response: Response, company: Company,
-                   refresh: bool, db: Session):
+def _prefetch_for_report(ticker: str, need_financials: bool) -> pipeline.Prefetched:
+    """Run the report's upstream fetches concurrently, mapping failures.
+
+    The callables are passed as lambdas rather than as direct references so
+    each name resolves from this module's globals at call time, which is what
+    keeps them monkeypatchable in the tests.
+    """
+    try:
+        return pipeline.prefetch(
+            ticker,
+            need_financials=need_financials,
+            fetch_financials=lambda t: fetch_financials(t),
+            fetch_filing=lambda t: _fetch_filing(t),
+            fetch_price=lambda t: get_price(t),
+        )
+    except ValueError:
+        # The SEC's ticker file does not list it - a real 404, as in
+        # get_or_ingest_company. `from None` because this is expected control
+        # flow rather than an error worth a traceback.
+        raise HTTPException(
+            status_code=404, detail=f"Unknown ticker: {ticker}"
+        ) from None
+    except requests.RequestException as exc:
+        logger.warning("SEC unavailable while ingesting %s: %s", ticker, exc)
+        raise HTTPException(
+            status_code=502,
+            detail="SEC EDGAR is unavailable right now; please try again shortly.",
+        ) from exc
+
+
+def _build_report(request: Request, response: Response, ticker: str,
+                  company: Company | None, refresh: bool, db: Session):
     """Build an uncached report. Split out so the timing breakdown opened
     by get_report wraps exactly the work, and nothing else.
     """
+    # Everything upstream at once: the financials fetch (only when this ticker
+    # has never been seen), the 10-K, and the price. None depends on another's
+    # answer, so in series they cost the sum and together they cost the
+    # slowest.
+    fetched = _prefetch_for_report(ticker, need_financials=company is None)
+
+    if fetched.series is not None:
+        logger.info("ingesting %s: not seen before", ticker)
+        store_financials(ticker, fetched.name, fetched.series)
+        company = db.query(Company).filter(Company.ticker == ticker).first()
+        if company is None:
+            raise HTTPException(status_code=502, detail="Ingestion failed")
+
     # Newest first, then limited - so this takes the most recent quarters,
     # which is the order build_report_data documents that it needs.
     rows = (
@@ -625,13 +675,12 @@ def _build_report(request: Request, response: Response, company: Company,
         .all()
     )
 
-    price = get_price(company.ticker)
     with timing.stage("metrics"):
-        data = build_report_data(rows, price)
+        data = build_report_data(rows, fetched.price)
     if "error" in data:
         raise HTTPException(status_code=404, detail=data["error"])
 
-    filing = _fetch_filing(company.ticker)
+    filing = fetched.filing
     narrative = None
     if filing:
         for attempt in range(SYNTHESIS_ATTEMPTS):

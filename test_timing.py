@@ -6,6 +6,7 @@ under-reporting, which is worse than no breakdown at all.
 """
 
 import concurrent.futures
+import time
 
 import timing
 
@@ -116,3 +117,54 @@ def test_stage_in_a_bare_thread_records_nothing():
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             pool.submit(work).result()
     assert t.stages == [], "context leaked into the worker unexpectedly"
+
+
+# --- nesting ---
+#
+# The parallel prefetch contains the fetches that run inside it. Summing every
+# stage would double-count them and make the unaccounted remainder look like
+# zero when it is really negative.
+
+def test_nested_stages_record_their_depth():
+    with timing.track("t") as t:
+        with timing.stage("outer"):
+            with timing.stage("inner"):
+                pass
+    assert t.depths == [1, 0], f"expected inner nested under outer, got {t.depths}"
+
+
+def test_breakdown_marks_nested_stages():
+    with timing.track("t") as t:
+        with timing.stage("outer"):
+            with timing.stage("inner"):
+                pass
+    assert ".inner=" in t.breakdown()
+
+
+def test_other_counts_only_top_level_stages():
+    """Otherwise a nested stage is charged twice and `other` clamps to zero."""
+    with timing.track("t") as t:
+        with timing.stage("outer"):
+            time.sleep(0.02)
+            with timing.stage("inner"):
+                time.sleep(0.01)
+    line = t.breakdown()
+    other = float(line.split("other=")[1].rstrip("s"))
+    assert other >= 0.0
+    # outer is top level and covers inner, so the remainder is tiny but real.
+    assert other < 0.02
+
+
+def test_depth_survives_a_thread_boundary():
+    """A fetch inside the prefetch must record as nested, not as top level."""
+    def work():
+        with timing.stage("inside_worker"):
+            pass
+
+    with timing.track("t") as t:
+        with timing.stage("prefetch"):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                pool.submit(timing.bind_context(work)).result()
+    by_name = dict(zip([n for n, _ in t.stages], t.depths, strict=True))
+    assert by_name["inside_worker"] == 1
+    assert by_name["prefetch"] == 0
