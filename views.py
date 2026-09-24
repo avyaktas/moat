@@ -284,6 +284,188 @@ def _paragraphs(text: str | None) -> str:
 # ---------------------------------------------------------------- the page
 
 
+# The report page's own styles. A plain string with single braces: it is
+# passed to _document() rather than interpolated into an f-string, so the
+# braces no longer have to be doubled - which is what made this block
+# awkward to edit and easy to break.
+_REPORT_CSS = """  .sheet { max-width: 62rem; margin: 0 auto; padding: 4rem 2rem 6rem; }
+
+  /* ---- masthead ---- */
+  .masthead {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 2rem; flex-wrap: wrap;
+    padding-bottom: 1.25rem; border-bottom: 1px solid var(--ink);
+  }
+  .eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 0.5rem;
+  }
+  .eyebrow a { text-decoration: none; border-bottom: 1px solid var(--rule);
+                padding-bottom: 1px; }
+  .eyebrow a:hover { border-color: var(--ink-soft); color: var(--ink); }
+  .ticker {
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: clamp(3rem, 9vw, 5.5rem); line-height: 0.9;
+    letter-spacing: -0.01em; margin: 0;
+  }
+  .company-name {
+    font-size: 0.95rem; color: var(--ink-soft); margin: 0.6rem 0 0;
+  }
+  .verdict {
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: clamp(1.5rem, 4vw, 2.25rem); line-height: 1;
+    padding: 0.5rem 0 0.5rem 1.25rem; border-left: 3px solid currentColor;
+  }
+  .verdict.buy    { color: var(--hold); }
+  .verdict.watch  { color: var(--ink); }
+  .verdict.avoid  { color: var(--breach); }
+  .verdict small {
+    display: block; font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 0.35rem;
+  }
+
+  /* ---- the wall: signature element ---- */
+  .wall {
+    display: grid; grid-template-columns: repeat(6, 1fr);
+    gap: 4px; margin: 2.5rem 0 0.75rem; height: 7rem;
+  }
+  .block {
+    position: relative; border: 1.5px solid var(--ink);
+    display: flex; align-items: flex-end;
+  }
+  .block.hold    { background: var(--ink); }
+  .block.breach  { background: transparent; border-color: var(--breach); }
+  .block.unknown {
+    border-color: var(--unknown);
+    background: repeating-linear-gradient(45deg,
+      transparent, transparent 5px, var(--rule) 5px, var(--rule) 6px);
+  }
+  .block-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0.5rem; line-height: 1.2;
+  }
+  .block.hold .block-label   { color: var(--paper); }
+  .block.breach .block-label { color: var(--breach); }
+  .wall-caption {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+    letter-spacing: 0.08em; color: var(--ink-soft); text-transform: uppercase;
+  }
+
+  /* ---- sections ---- */
+  section { margin-top: 3.5rem; }
+  h2 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem; letter-spacing: 0.16em; text-transform: uppercase;
+    font-weight: 500; color: var(--ink-soft);
+    padding-bottom: 0.6rem; border-bottom: 1px solid var(--rule);
+    margin: 0 0 1.5rem;
+  }
+
+  /* ---- checks ---- */
+  table.checks { width: 100%; border-collapse: collapse; }
+  table.checks td { padding: 0.7rem 0; border-bottom: 1px solid var(--rule);
+                     vertical-align: baseline; }
+  .check-mark { width: 1.5rem; }
+  .check-mark::before {
+    content: ''; display: block; width: 9px; height: 9px; border: 1.5px solid;
+  }
+  tr.hold    .check-mark::before { background: var(--hold); border-color: var(--hold); }
+  tr.breach  .check-mark::before { background: transparent; border-color: var(--breach); }
+  tr.unknown .check-mark::before { background: var(--rule); border-color: var(--unknown); }
+  .check-name { width: 12rem; font-weight: 500; }
+  .check-detail { font-family: 'JetBrains Mono', monospace; font-size: 0.82rem;
+                   color: var(--ink-soft); }
+  tr.breach .check-detail { color: var(--breach); }
+
+  /* ---- figures ---- */
+  .figures {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 1px; background: var(--rule); border: 1px solid var(--rule);
+  }
+  .fig { background: var(--paper); padding: 1rem 1.1rem;
+          transition: background 150ms ease; }
+  .fig:hover { background: #FCFBF7; }
+  .fig-label {
+    display: block; font-size: 0.72rem; color: var(--ink-soft);
+    margin-bottom: 0.35rem;
+  }
+  .fig-value {
+    display: block; font-family: 'JetBrains Mono', monospace;
+    font-size: 1.15rem; font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- health ---- */
+  table.health { width: 100%; border-collapse: collapse;
+                  font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+  table.health th {
+    font-family: 'Inter', sans-serif; font-size: 0.72rem; font-weight: 500;
+    color: var(--ink-soft); text-align: left; padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--ink);
+  }
+  table.health td { padding: 0.6rem 0; border-bottom: 1px solid var(--rule); }
+  table.health td:first-child { font-family: 'Inter', sans-serif; }
+  .n { text-align: right; font-variant-numeric: tabular-nums; }
+  .up   { color: var(--hold); }
+  .down { color: var(--breach); }
+  .survivability {
+    margin-top: 1rem; font-size: 0.9rem; color: var(--ink-soft);
+    padding-left: 1rem; border-left: 2px solid var(--rule);
+  }
+
+  /* ---- prose ---- */
+  .prose { max-width: var(--measure); }
+  .prose p { margin: 0 0 1.15rem; }
+  .lede { font-size: 1.05rem; }
+
+  /* ---- risks ---- */
+  .risk { padding: 1.75rem 0; border-bottom: 1px solid var(--rule); }
+  .risk:first-of-type { padding-top: 0; }
+  .risk h3 { font-size: 1rem; font-weight: 600; margin: 0 0 0.9rem;
+              max-width: var(--measure); }
+  .risk blockquote {
+    margin: 0 0 0.5rem; padding-left: 1.1rem;
+    border-left: 2px solid var(--ink); font-size: 0.92rem;
+    color: var(--ink-soft); max-width: var(--measure);
+  }
+  .verified, .unverified {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.65rem;
+    letter-spacing: 0.1em; text-transform: uppercase;
+  }
+  .verified   { color: var(--hold); }
+  .unverified { color: var(--breach); }
+  .trigger { margin: 1rem 0 0; font-size: 0.92rem; max-width: var(--measure); }
+  .trigger-label {
+    display: block; font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 0.3rem;
+  }
+
+  /* ---- footer ---- */
+  footer {
+    margin-top: 4rem; padding-top: 1.25rem; border-top: 1px solid var(--ink);
+    font-size: 0.78rem; color: var(--ink-soft);
+  }
+  footer a { color: var(--ink-soft); text-decoration: none;
+              border-bottom: 1px solid var(--rule); }
+  footer a:hover { color: var(--ink); border-color: var(--ink-soft); }
+  footer p { margin: 0.3rem 0; }
+  .disclaimer { margin-top: 1.25rem; font-style: italic; }
+
+  @media (max-width: 40rem) {
+    .sheet { padding: 2.5rem 1.25rem 4rem; }
+    .wall { height: 5rem; }
+    .block-label { font-size: 0.5rem; padding: 0.3rem; }
+    .check-name { width: auto; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .block { transition: background 200ms ease; }
+  }
+"""
+
+
 def render_report(report: dict) -> str:
     data = report.get("data", {})
     ttm = data.get("ttm", {})
@@ -316,193 +498,7 @@ def render_report(report: dict) -> str:
     else:
         filing_line = "10-K unavailable"
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{esc(report.get("company"))} · Moat</title>
-{_FONTS}
-<style>{_TOKENS}
-  .sheet {{ max-width: 62rem; margin: 0 auto; padding: 4rem 2rem 6rem; }}
-
-  /* ---- masthead ---- */
-  .masthead {{
-    display: flex; align-items: flex-end; justify-content: space-between;
-    gap: 2rem; flex-wrap: wrap;
-    padding-bottom: 1.25rem; border-bottom: 1px solid var(--ink);
-  }}
-  .eyebrow {{
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--ink-soft); margin-bottom: 0.5rem;
-  }}
-  .eyebrow a {{ text-decoration: none; border-bottom: 1px solid var(--rule);
-                padding-bottom: 1px; }}
-  .eyebrow a:hover {{ border-color: var(--ink-soft); color: var(--ink); }}
-  .ticker {{
-    font-family: 'Instrument Serif', Georgia, serif;
-    font-size: clamp(3rem, 9vw, 5.5rem); line-height: 0.9;
-    letter-spacing: -0.01em; margin: 0;
-  }}
-  .company-name {{
-    font-size: 0.95rem; color: var(--ink-soft); margin: 0.6rem 0 0;
-  }}
-  .verdict {{
-    font-family: 'Instrument Serif', Georgia, serif;
-    font-size: clamp(1.5rem, 4vw, 2.25rem); line-height: 1;
-    padding: 0.5rem 0 0.5rem 1.25rem; border-left: 3px solid currentColor;
-  }}
-  .verdict.buy    {{ color: var(--hold); }}
-  .verdict.watch  {{ color: var(--ink); }}
-  .verdict.avoid  {{ color: var(--breach); }}
-  .verdict small {{
-    display: block; font-family: 'JetBrains Mono', monospace;
-    font-size: 0.65rem; letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--ink-soft); margin-bottom: 0.35rem;
-  }}
-
-  /* ---- the wall: signature element ---- */
-  .wall {{
-    display: grid; grid-template-columns: repeat(6, 1fr);
-    gap: 4px; margin: 2.5rem 0 0.75rem; height: 7rem;
-  }}
-  .block {{
-    position: relative; border: 1.5px solid var(--ink);
-    display: flex; align-items: flex-end;
-  }}
-  .block.hold    {{ background: var(--ink); }}
-  .block.breach  {{ background: transparent; border-color: var(--breach); }}
-  .block.unknown {{
-    border-color: var(--unknown);
-    background: repeating-linear-gradient(45deg,
-      transparent, transparent 5px, var(--rule) 5px, var(--rule) 6px);
-  }}
-  .block-label {{
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.6rem; letter-spacing: 0.08em; text-transform: uppercase;
-    padding: 0.5rem; line-height: 1.2;
-  }}
-  .block.hold .block-label   {{ color: var(--paper); }}
-  .block.breach .block-label {{ color: var(--breach); }}
-  .wall-caption {{
-    font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
-    letter-spacing: 0.08em; color: var(--ink-soft); text-transform: uppercase;
-  }}
-
-  /* ---- sections ---- */
-  section {{ margin-top: 3.5rem; }}
-  h2 {{
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.72rem; letter-spacing: 0.16em; text-transform: uppercase;
-    font-weight: 500; color: var(--ink-soft);
-    padding-bottom: 0.6rem; border-bottom: 1px solid var(--rule);
-    margin: 0 0 1.5rem;
-  }}
-
-  /* ---- checks ---- */
-  table.checks {{ width: 100%; border-collapse: collapse; }}
-  table.checks td {{ padding: 0.7rem 0; border-bottom: 1px solid var(--rule);
-                     vertical-align: baseline; }}
-  .check-mark {{ width: 1.5rem; }}
-  .check-mark::before {{
-    content: ''; display: block; width: 9px; height: 9px; border: 1.5px solid;
-  }}
-  tr.hold    .check-mark::before {{ background: var(--hold); border-color: var(--hold); }}
-  tr.breach  .check-mark::before {{ background: transparent; border-color: var(--breach); }}
-  tr.unknown .check-mark::before {{ background: var(--rule); border-color: var(--unknown); }}
-  .check-name {{ width: 12rem; font-weight: 500; }}
-  .check-detail {{ font-family: 'JetBrains Mono', monospace; font-size: 0.82rem;
-                   color: var(--ink-soft); }}
-  tr.breach .check-detail {{ color: var(--breach); }}
-
-  /* ---- figures ---- */
-  .figures {{
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-    gap: 1px; background: var(--rule); border: 1px solid var(--rule);
-  }}
-  .fig {{ background: var(--paper); padding: 1rem 1.1rem;
-          transition: background 150ms ease; }}
-  .fig:hover {{ background: #FCFBF7; }}
-  .fig-label {{
-    display: block; font-size: 0.72rem; color: var(--ink-soft);
-    margin-bottom: 0.35rem;
-  }}
-  .fig-value {{
-    display: block; font-family: 'JetBrains Mono', monospace;
-    font-size: 1.15rem; font-variant-numeric: tabular-nums;
-  }}
-
-  /* ---- health ---- */
-  table.health {{ width: 100%; border-collapse: collapse;
-                  font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }}
-  table.health th {{
-    font-family: 'Inter', sans-serif; font-size: 0.72rem; font-weight: 500;
-    color: var(--ink-soft); text-align: left; padding-bottom: 0.6rem;
-    border-bottom: 1px solid var(--ink);
-  }}
-  table.health td {{ padding: 0.6rem 0; border-bottom: 1px solid var(--rule); }}
-  table.health td:first-child {{ font-family: 'Inter', sans-serif; }}
-  .n {{ text-align: right; font-variant-numeric: tabular-nums; }}
-  .up   {{ color: var(--hold); }}
-  .down {{ color: var(--breach); }}
-  .survivability {{
-    margin-top: 1rem; font-size: 0.9rem; color: var(--ink-soft);
-    padding-left: 1rem; border-left: 2px solid var(--rule);
-  }}
-
-  /* ---- prose ---- */
-  .prose {{ max-width: var(--measure); }}
-  .prose p {{ margin: 0 0 1.15rem; }}
-  .lede {{ font-size: 1.05rem; }}
-
-  /* ---- risks ---- */
-  .risk {{ padding: 1.75rem 0; border-bottom: 1px solid var(--rule); }}
-  .risk:first-of-type {{ padding-top: 0; }}
-  .risk h3 {{ font-size: 1rem; font-weight: 600; margin: 0 0 0.9rem;
-              max-width: var(--measure); }}
-  .risk blockquote {{
-    margin: 0 0 0.5rem; padding-left: 1.1rem;
-    border-left: 2px solid var(--ink); font-size: 0.92rem;
-    color: var(--ink-soft); max-width: var(--measure);
-  }}
-  .verified, .unverified {{
-    font-family: 'JetBrains Mono', monospace; font-size: 0.65rem;
-    letter-spacing: 0.1em; text-transform: uppercase;
-  }}
-  .verified   {{ color: var(--hold); }}
-  .unverified {{ color: var(--breach); }}
-  .trigger {{ margin: 1rem 0 0; font-size: 0.92rem; max-width: var(--measure); }}
-  .trigger-label {{
-    display: block; font-family: 'JetBrains Mono', monospace;
-    font-size: 0.65rem; letter-spacing: 0.1em; text-transform: uppercase;
-    color: var(--ink-soft); margin-bottom: 0.3rem;
-  }}
-
-  /* ---- footer ---- */
-  footer {{
-    margin-top: 4rem; padding-top: 1.25rem; border-top: 1px solid var(--ink);
-    font-size: 0.78rem; color: var(--ink-soft);
-  }}
-  footer a {{ color: var(--ink-soft); text-decoration: none;
-              border-bottom: 1px solid var(--rule); }}
-  footer a:hover {{ color: var(--ink); border-color: var(--ink-soft); }}
-  footer p {{ margin: 0.3rem 0; }}
-  .disclaimer {{ margin-top: 1.25rem; font-style: italic; }}
-
-  @media (max-width: 40rem) {{
-    .sheet {{ padding: 2.5rem 1.25rem 4rem; }}
-    .wall {{ height: 5rem; }}
-    .block-label {{ font-size: 0.5rem; padding: 0.3rem; }}
-    .check-name {{ width: auto; }}
-  }}
-  @media (prefers-reduced-motion: no-preference) {{
-    .block {{ transition: background 200ms ease; }}
-  }}
-</style>
-</head>
-<body>
-<div class="sheet">
+    body = f"""<div class="sheet">
 
   <header class="masthead">
     <div>
@@ -571,8 +567,11 @@ def render_report(report: dict) -> str:
   </footer>
 
 </div>
-</body>
-</html>"""
+"""
+    return _document(
+        f'{esc(report.get("company"))} \u00b7 Moat', body, _REPORT_CSS
+    )
+
 
 
 # ---------------------------------------------------------------- landing page
