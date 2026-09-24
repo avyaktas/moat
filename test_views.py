@@ -304,3 +304,146 @@ def test_report_escapes_a_hostile_company_name():
     html = render_report(r)
     assert "<img src=x" not in html
     assert "&lt;img" in html
+
+
+# --- the progressive report ---
+#
+# A cold ticker takes about thirty seconds, nearly all of it the model
+# writing. The page used to be a blank document for that whole time. These
+# cover the three states it can now be in.
+
+from views import (
+    render_failure,
+    render_report_fragment,
+    render_report_shell,
+)
+
+
+def test_shell_is_a_complete_document():
+    html = render_report_shell("NVDA")
+    assert html.strip().startswith("<!DOCTYPE html>")
+    assert html.rstrip().endswith("</html>")
+
+
+def test_shell_shows_the_ticker_immediately():
+    """Something real in the first response, not after JavaScript runs."""
+    assert "NVDA" in render_report_shell("nvda")
+
+
+def test_shell_lists_every_stage_server_side():
+    html = render_report_shell("NVDA")
+    for key in ("fetch", "store", "metrics", "synthesis"):
+        assert f'data-stage="{key}"' in html
+    assert "Fetching SEC filings" in html
+    assert "Writing analysis" in html
+
+
+def test_shell_starts_with_the_first_stage_running():
+    html = render_report_shell("NVDA")
+    assert 'data-stage="fetch" data-state="running"' in html
+
+
+def test_shell_connects_to_the_stream_for_that_ticker():
+    assert "/company/NVDA/report/stream" in render_report_shell("nvda")
+
+
+def test_shell_escapes_the_ticker():
+    """The ticker reaches the page from the URL."""
+    html = render_report_shell('X"><script>alert(1)</script>')
+    assert "<script>alert(1)</script>" not in html
+
+
+def test_shell_offers_a_path_without_javascript():
+    html = render_report_shell("NVDA")
+    assert "<noscript>" in html
+    assert "/company/NVDA/report" in html
+
+
+def test_shell_handles_a_dropped_connection():
+    """A stream that dies must not leave the page spinning forever."""
+    html = render_report_shell("NVDA")
+    assert "onerror" in html
+    assert "Connection lost" in html
+
+
+def _computed_only_report() -> dict:
+    r = _report_with_health({
+        "cash": {"prior": 1.0, "current": 2.0, "change": 1.0},
+        "survivability": {"verdict": "Self-funding"},
+    })
+    r["data"]["ttm"] = {"revenue": 331839000000.0, "roic": 0.277}
+    r["data"]["scorecard"]["checks"] = [
+        {"name": "ROIC", "status": "PASS", "detail": "27.7% vs 15%"},
+        {"name": "Leverage", "status": "FAIL", "detail": "2.4 - a red flag"},
+    ]
+    r["data"]["scorecard"]["summary"] = {"passed": 1, "evaluable": 2, "unknown": 0}
+    r["sources"] = {"financials": "SEC EDGAR", "price": "yfinance",
+                    "filing": "http://x", "report_date": "2026-01-31"}
+    return r
+
+
+def test_partial_fragment_shows_the_computed_figures():
+    """The figures are final before the model starts - that is the point."""
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert "$331.8B" in html
+    assert "27.7%" in html
+    assert "ROIC" in html
+    assert "Self-funding" in html
+
+
+def test_partial_fragment_marks_the_narrative_as_still_being_written():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert "Writing analysis" in html
+    assert "pending" in html
+
+
+def test_partial_fragment_verdict_reads_pending_not_no_verdict():
+    """NO VERDICT means the framework reached one. This has not run yet."""
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert "PENDING" in html
+    assert "NO VERDICT" not in html
+
+
+def test_partial_fragment_omits_the_grounding_claim():
+    """No quotes exist yet, so claiming a verification rate would be a lie."""
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert "of quotes verified" not in html
+
+
+def test_finished_fragment_has_no_pending_markers():
+    r = _computed_only_report()
+    r["narrative"] = {"verdict": "WATCH-CASE", "grounding_rate": 1.0,
+                      "hype_vs_reality": "h", "risks": [], "reasoning": "r",
+                      "strategy": "s"}
+    html = render_report_fragment(r, pending=False)
+    assert "Writing analysis" not in html
+    assert "WATCH-CASE" in html
+    assert "of quotes verified" in html
+
+
+def test_partial_and_final_share_one_layout():
+    """Two copies of the layout would drift; there is only one builder."""
+    r = _computed_only_report()
+    partial = render_report_fragment(r, pending=True)
+    r["narrative"] = {"verdict": "WATCH-CASE", "grounding_rate": 1.0,
+                      "hype_vs_reality": "h", "risks": [], "reasoning": "r",
+                      "strategy": "s"}
+    final = render_report_fragment(r, pending=False)
+    for heading in ("Scorecard", "Figures", "Financial health",
+                    "Hype versus reality", "Risks and sell triggers",
+                    "The case", "The strategy"):
+        assert heading in partial, f"{heading} missing while pending"
+        assert heading in final
+
+
+def test_failure_block_shows_the_reason_and_a_way_back():
+    html = render_failure("SEC EDGAR unavailable", "Try again shortly.")
+    assert "SEC EDGAR unavailable" in html
+    assert "Try again shortly." in html
+    assert 'href="/"' in html
+
+
+def test_failure_block_escapes_its_input():
+    html = render_failure("<script>x</script>", "<img src=x onerror=y>")
+    assert "<script>x</script>" not in html
+    assert "<img src=x" not in html

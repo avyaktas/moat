@@ -16,6 +16,7 @@ FORMATTING IS THE POINT
 """
 
 import html
+import json
 
 # ---------------------------------------------------------------- shared shell
 #
@@ -463,10 +464,105 @@ _REPORT_CSS = """  .sheet { max-width: 62rem; margin: 0 auto; padding: 4rem 2rem
   @media (prefers-reduced-motion: no-preference) {
     .block { transition: background 200ms ease; }
   }
+
+
+  /* ---- progress, while the report is being built ---- */
+  .progress {
+    list-style: none; margin: 2.5rem 0 0; padding: 0;
+    font-family: 'JetBrains Mono', monospace; font-size: 0.8rem;
+  }
+  .progress li {
+    display: flex; align-items: baseline; gap: 0.75rem;
+    padding: 0.55rem 0; border-bottom: 1px solid var(--rule);
+    color: var(--unknown); transition: color 200ms ease;
+  }
+  .progress .mark {
+    width: 0.9rem; height: 0.9rem; flex: none; border: 1.5px solid currentColor;
+    align-self: center;
+  }
+  .progress .took { margin-left: auto; font-size: 0.72rem; opacity: 0.75; }
+  .progress li[data-state="running"] { color: var(--ink); }
+  .progress li[data-state="running"] .mark {
+    background: var(--ink); border-color: var(--ink);
+    animation: moat-pulse 1.1s ease-in-out infinite;
+  }
+  .progress li[data-state="done"] { color: var(--hold); }
+  .progress li[data-state="done"] .mark {
+    background: var(--hold); border-color: var(--hold);
+  }
+  .progress li[data-state="skipped"] { color: var(--unknown); }
+  .progress li[data-state="skipped"] .mark {
+    background: repeating-linear-gradient(45deg, transparent, transparent 3px,
+      var(--rule) 3px, var(--rule) 4px);
+  }
+  .progress li[data-state="failed"] { color: var(--breach); }
+  .progress li[data-state="failed"] .mark {
+    background: transparent; border-color: var(--breach);
+  }
+
+  @keyframes moat-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+  @media (prefers-reduced-motion: reduce) {
+    .progress li[data-state="running"] .mark { animation: none; }
+    .skeleton::after { animation: none; }
+  }
+
+  /* ---- a narrative section the model has not finished ---- */
+  .pending {
+    display: flex; align-items: center; gap: 0.6rem; margin: 0;
+    font-family: 'JetBrains Mono', monospace; font-size: 0.78rem;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft);
+  }
+  .pending-dot {
+    width: 7px; height: 7px; background: var(--ink-soft); flex: none;
+    animation: moat-pulse 1.1s ease-in-out infinite;
+  }
+  .verdict.none small { color: var(--ink-soft); }
+
+  /* ---- the skeleton shown before any figures exist ---- */
+  .skeleton {
+    position: relative; overflow: hidden;
+    background: var(--rule); height: 7rem; margin: 2.5rem 0 0.75rem;
+  }
+  .skeleton::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.45),
+      transparent);
+    animation: moat-sweep 1.6s ease-in-out infinite;
+  }
+  @keyframes moat-sweep { 0% { transform: translateX(-100%); }
+                          100% { transform: translateX(100%); } }
+
+  /* ---- failure ---- */
+  .failure {
+    margin: 2.5rem 0 0; padding: 1.25rem 1.4rem;
+    border-left: 3px solid var(--breach); background: rgba(180, 70, 47, 0.06);
+  }
+  .failure h2 {
+    border: none; padding: 0; margin: 0 0 0.5rem; color: var(--breach);
+    font-size: 0.75rem;
+  }
+  .failure p { margin: 0; font-size: 0.95rem; }
+  .failure a { color: var(--ink); }
 """
 
 
-def render_report(report: dict) -> str:
+def _pending(label: str) -> str:
+    """A narrative section the model has not finished writing yet."""
+    return (
+        f'<p class="pending"><span class="pending-dot"></span>{esc(label)}</p>'
+    )
+
+
+def _report_sheet(report: dict, pending: bool = False) -> str:
+    """The tearsheet body, with or without a narrative.
+
+    One builder for both states. When pending is true the computed sections
+    render exactly as they finally will - they are already final - and only
+    the narrative sections show that the model is still working. That is what
+    lets the page show real content seconds after the request rather than
+    minutes, without maintaining a second copy of the layout that could drift
+    from this one.
+    """
     data = report.get("data", {})
     ttm = data.get("ttm", {})
     scorecard = data.get("scorecard", {})
@@ -476,7 +572,7 @@ def render_report(report: dict) -> str:
     sources = report.get("sources", {})
     cache = report.get("cache", {})
 
-    verdict = narrative.get("verdict", "NO VERDICT")
+    verdict = narrative.get("verdict", "PENDING" if pending else "NO VERDICT")
     verdict_class = {
         "BUY-CASE": "buy",
         "WATCH-CASE": "watch",
@@ -536,29 +632,33 @@ def render_report(report: dict) -> str:
 
   <section>
     <h2>Hype versus reality</h2>
-    <div class="prose lede">{_paragraphs(narrative.get("hype_vs_reality"))}</div>
+    <div class="prose lede">{_pending("Writing analysis&hellip;") if pending
+        else _paragraphs(narrative.get("hype_vs_reality"))}</div>
   </section>
 
   <section>
     <h2>Risks and sell triggers</h2>
-    {_risks(narrative.get("risks", []))}
+    {_pending("Reading the risk factors&hellip;") if pending
+        else _risks(narrative.get("risks", []))}
   </section>
 
   <section>
     <h2>The case</h2>
-    <div class="prose">{_paragraphs(narrative.get("reasoning"))}</div>
+    <div class="prose">{_pending("Writing analysis&hellip;") if pending
+        else _paragraphs(narrative.get("reasoning"))}</div>
   </section>
 
   <section>
     <h2>The strategy</h2>
-    <div class="prose">{_paragraphs(narrative.get("strategy"))}</div>
+    <div class="prose">{_pending("Writing analysis&hellip;") if pending
+        else _paragraphs(narrative.get("strategy"))}</div>
   </section>
 
   <footer>
     <p>Financials from {esc(sources.get("financials"))}.
        Price from {esc(sources.get("price"))}.</p>
-    <p>Filing: {filing_line} ·
-       {grounding_str} of quotes verified against the source document.</p>
+    <p>Filing: {filing_line}{"" if pending else
+       f" · {grounding_str} of quotes verified against the source document."}</p>
     <p>{"Cached" if cache.get("cached") else "Generated"}
        {_timestamp(cache.get("generated_at"))}</p>
     <p class="disclaimer">This is a screen against stated criteria, not
@@ -568,8 +668,15 @@ def render_report(report: dict) -> str:
 
 </div>
 """
+    return body
+
+
+def render_report(report: dict) -> str:
+    """The finished tearsheet, as a complete page."""
     return _document(
-        f'{esc(report.get("company"))} \u00b7 Moat', body, _REPORT_CSS
+        f'{esc(report.get("company"))} \u00b7 Moat',
+        _report_sheet(report),
+        _REPORT_CSS,
     )
 
 
@@ -717,3 +824,151 @@ def render_not_found(detail: str) -> str:
     </div></div>
     """
     return _document("Not found · Moat", body, css)
+
+# ---------------------------------------------------- the progressive report
+#
+# A cold ticker takes around thirty seconds, almost all of it the model
+# writing. The page used to be a blank document for that whole time, because
+# the browser was simply waiting on the response. These three renderers turn
+# it into something that shows what it knows the moment it knows it.
+
+
+def _progress_list(active: str = "fetch") -> str:
+    """The stage checklist, with one stage already running.
+
+    Rendered server-side so the sequence is visible in the very first byte the
+    browser receives, rather than appearing once JavaScript has run.
+    """
+    stages = [
+        ("fetch", "Fetching SEC filings"),
+        ("store", "Storing financials"),
+        ("metrics", "Computing metrics"),
+        ("synthesis", "Writing analysis"),
+    ]
+    items = []
+    for key, label in stages:
+        state = "running" if key == active else "pending"
+        items.append(
+            f'<li data-stage="{key}" data-state="{state}">'
+            f'<span class="mark"></span><span class="label">{esc(label)}</span>'
+            f'<span class="took"></span></li>'
+        )
+    return f'<ul class="progress" id="progress">{"".join(items)}</ul>'
+
+
+def render_report_fragment(report: dict, pending: bool = False) -> str:
+    """The sheet on its own, for swapping into a page already on screen."""
+    return _report_sheet(report, pending=pending)
+
+
+def render_failure(title: str, detail: str) -> str:
+    """An error the reader can act on, in the report's own styling."""
+    return f"""
+    <div class="failure">
+      <h2>{esc(title)}</h2>
+      <p>{esc(detail)}</p>
+      <p style="margin-top:0.9rem"><a href="/">&larr; Back to search</a></p>
+    </div>
+    """
+
+
+def render_report_shell(ticker: str) -> str:
+    """The page served immediately while the report is built.
+
+    It carries the masthead and the stage checklist so there is something real
+    on screen in the first response, then connects to the stream and replaces
+    itself as each stage completes: the computed figures arrive at about two
+    seconds, the narrative when the model is done.
+
+    EventSource rather than polling: the server already knows when each stage
+    finishes, so there is nothing to discover by asking repeatedly, and no job
+    record to store or clean up.
+    """
+    safe = esc(ticker.upper())
+    body = f"""<div class="sheet" id="sheet">
+
+  <header class="masthead">
+    <div>
+      <p class="eyebrow"><a href="/">Moat</a> · Filing analysis</p>
+      <h1 class="ticker">{safe}</h1>
+      <p class="company-name">Building this report&hellip;</p>
+    </div>
+    <div class="verdict none">
+      <small>Framework verdict</small>
+      PENDING
+    </div>
+  </header>
+
+  <div class="skeleton" aria-hidden="true"></div>
+
+  {_progress_list()}
+
+  <noscript>
+    <p class="wall-caption" style="margin-top:1.5rem">
+      This page builds the report as it loads and needs JavaScript.
+      The same analysis is available as JSON at
+      <a href="/company/{safe}/report">/company/{safe}/report</a>.
+    </p>
+  </noscript>
+
+</div>
+<script>
+(function () {{
+  var sheet = document.getElementById('sheet');
+  var source = new EventSource({json.dumps(f"/company/{ticker.upper()}/report/stream")});
+  var settled = false;
+
+  function setStage(stage) {{
+    var li = document.querySelector('[data-stage="' + stage.key + '"]');
+    if (!li) return;
+    li.setAttribute('data-state', stage.state);
+    if (stage.seconds !== undefined) {{
+      li.querySelector('.took').textContent = stage.seconds.toFixed(1) + 's';
+    }}
+    if (stage.detail) {{
+      li.querySelector('.label').textContent = stage.label + ' — ' + stage.detail;
+    }}
+  }}
+
+  source.addEventListener('stage', function (e) {{
+    setStage(JSON.parse(e.data));
+  }});
+
+  // The computed figures, ready long before the narrative. Replacing the
+  // whole sheet keeps one source of truth for the layout: the server renders
+  // it, the page swaps it in.
+  source.addEventListener('partial', function (e) {{
+    sheet.outerHTML = JSON.parse(e.data).html;
+  }});
+
+  source.addEventListener('done', function (e) {{
+    settled = true;
+    document.getElementById('sheet').outerHTML = JSON.parse(e.data).html;
+    source.close();
+  }});
+
+  source.addEventListener('failed', function (e) {{
+    settled = true;
+    var payload = JSON.parse(e.data);
+    var target = document.getElementById('sheet') || document.body;
+    target.insertAdjacentHTML('beforeend', payload.html);
+    var running = document.querySelector('[data-state="running"]');
+    if (running) running.setAttribute('data-state', 'failed');
+    source.close();
+  }});
+
+  // A dropped connection must not leave the page spinning forever.
+  source.onerror = function () {{
+    if (settled) return;
+    settled = true;
+    source.close();
+    var target = document.getElementById('sheet') || document.body;
+    target.insertAdjacentHTML('beforeend',
+      {json.dumps(render_failure(
+          "Connection lost",
+          "The connection to the server dropped before the report was "
+          "finished. Reloading will pick up from wherever it got to."))});
+  }};
+}})();
+</script>"""
+    return _document(f"{safe} · Moat", body, _REPORT_CSS)
