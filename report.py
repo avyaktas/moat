@@ -27,6 +27,7 @@ THE VERDICT IS A FRAMEWORK CONCLUSION, NOT ADVICE
 import json
 
 from analysis import answer_question, check_quote
+from llm import get_client
 from serialization import to_jsonable
 from metrics import (
     debt_to_equity,
@@ -231,11 +232,7 @@ def synthesize(report_data: dict, filing_text: str, company_name: str,
     Raises SynthesisError if the model's reply will not parse. Failure is a
     raise, never a return value, so the caller cannot cache it by accident.
     """
-    from anthropic import Anthropic
-
-    from config import settings
-
-    client = client or Anthropic(api_key=settings.anthropic_key)
+    client = client or get_client()
 
     # default=to_jsonable, not default=str. The same boundary that guards the
     # cache write guards the prompt: Decimals arrive as numbers rather than as

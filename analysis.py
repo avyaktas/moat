@@ -17,7 +17,7 @@ import re
 
 from anthropic import Anthropic
 
-from config import settings
+from llm import get_client
 
 MODEL = "claude-sonnet-5"
 MAX_TOKENS = 2000
@@ -111,7 +111,7 @@ def answer_question(question: str, source_text: str, client: Anthropic | None = 
         grounding_rate:  fraction of quotes verified, or None if no quotes
         raw:             the model's unparsed response (for debugging)
     """
-    client = client or Anthropic(api_key=settings.anthropic_key)
+    client = client or get_client()
  
     user_message = (
         f"<document>\n{source_text}\n</document>\n\n"
