@@ -3,4 +3,21 @@ __pycache__/
 *.pyc
 .env
 .git/
+.github/
 .pytest_cache/
+
+# Tests and their fixtures are not needed to serve traffic. The 69KB eval
+# fixture in particular exists for the grounding harness, which is run from a
+# checkout rather than from the image.
+test_*.py
+conftest.py
+grounding_replay.py
+evaluate.py
+eval_data.py
+eval_questions.md
+fixtures/
+scripts/
+
+# Personal notes, kept local
+PROJECT_GUIDE.md
+HANDOFF.md
