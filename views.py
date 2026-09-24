@@ -256,6 +256,25 @@ def _risks(risks: list[dict]) -> str:
     return "".join(out)
 
 
+def _timestamp(value: str | None) -> str:
+    """Render an ISO timestamp, labelling it UTC only when it is UTC.
+
+    The footer used to slice the first 19 characters and append " UTC"
+    unconditionally. Postgres returns timestamptz in the session timezone, so
+    a cached report arrived as "2026-09-24T14:44:35-04:00" and was displayed
+    as "2026-09-24 14:44:35 UTC" - four hours wrong, under a label asserting
+    otherwise. The payload now always carries UTC; this refuses to make the
+    claim for anything that does not.
+    """
+    if not value:
+        return ""
+    text = str(value)
+    stamp = esc(text[:19].replace("T", " "))
+    if text.endswith("+00:00") or text.endswith("Z"):
+        return f"{stamp} UTC."
+    return f"{stamp}."
+
+
 def _paragraphs(text: str | None) -> str:
     if not text:
         return ""
@@ -546,7 +565,7 @@ def render_report(report: dict) -> str:
     <p>Filing: {filing_line} ·
        {grounding_str} of quotes verified against the source document.</p>
     <p>{"Cached" if cache.get("cached") else "Generated"}
-       {esc(cache.get("generated_at", ""))[:19].replace("T", " ")} UTC.</p>
+       {_timestamp(cache.get("generated_at"))}</p>
     <p class="disclaimer">This is a screen against stated criteria, not
        investment advice. Every figure is computed from filed data; the
        narrative interprets those figures and does not calculate them.</p>

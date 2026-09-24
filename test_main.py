@@ -914,3 +914,102 @@ def test_companies_ordering_is_stable(client):
     a = [c["ticker"] for c in client.get("/companies?limit=10").json()]
     b = [c["ticker"] for c in client.get("/companies?limit=10").json()]
     assert a == b
+
+
+# --- HTTP caching on the report routes ---
+
+def _cacheable_report(client, monkeypatch):
+    """Generate and persist one report, returning its response."""
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", lambda *a, **k: {
+        "verdict": "WATCH-CASE", "risks": [], "grounding_rate": 1.0,
+    })
+    return client.get("/company/MSFT/report")
+
+
+def test_report_sends_an_etag(client, monkeypatch):
+    resp = _cacheable_report(client, monkeypatch)
+    assert resp.status_code == 200
+    assert resp.headers.get("ETag")
+
+
+def test_report_sends_cache_control(client, monkeypatch):
+    resp = _cacheable_report(client, monkeypatch)
+    assert "max-age" in resp.headers.get("Cache-Control", "")
+
+
+def test_matching_etag_returns_304(client, monkeypatch):
+    first = _cacheable_report(client, monkeypatch)
+    etag = first.headers["ETag"]
+
+    second = client.get("/company/MSFT/report", headers={"If-None-Match": etag})
+    assert second.status_code == 304
+    assert second.content == b"", "a 304 must not carry a body"
+
+
+def test_stale_etag_returns_the_report(client, monkeypatch):
+    _cacheable_report(client, monkeypatch)
+    resp = client.get("/company/MSFT/report",
+                      headers={"If-None-Match": '"not-the-right-etag"'})
+    assert resp.status_code == 200
+    assert resp.json()["company"] == "MSFT"
+
+
+def test_etag_is_stable_across_requests(client, monkeypatch):
+    """A validator that changes every request never produces a 304."""
+    first = _cacheable_report(client, monkeypatch)
+    second = client.get("/company/MSFT/report")
+    assert first.headers["ETag"] == second.headers["ETag"]
+
+
+def test_degraded_report_is_not_client_cacheable(client, monkeypatch):
+    """A degraded report is deliberately not persisted so the next request
+    retries; letting a browser cache it would defeat exactly that."""
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", lambda *a, **k: None)
+
+    resp = client.get("/company/MSFT/report")
+    assert resp.status_code == 200
+    assert resp.json()["narrative"] is None
+    assert resp.headers.get("Cache-Control") == "no-store"
+
+
+def test_view_route_also_supports_conditional_requests(client, monkeypatch):
+    _cacheable_report(client, monkeypatch)
+    first = client.get("/company/MSFT/report/view")
+    assert first.status_code == 200
+    assert first.headers.get("ETag")
+
+    second = client.get("/company/MSFT/report/view",
+                        headers={"If-None-Match": first.headers["ETag"]})
+    assert second.status_code == 304
+
+
+def test_view_route_still_returns_html(client, monkeypatch):
+    _cacheable_report(client, monkeypatch)
+    resp = client.get("/company/MSFT/report/view")
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "WATCH-CASE" in resp.text
+
+
+def test_generated_at_is_utc_on_a_cache_hit(client, monkeypatch):
+    """Postgres returns timestamptz in the session timezone, so a cached
+    report's generated_at came back with a local offset while a freshly built
+    one was UTC - the same field, two representations."""
+    _cacheable_report(client, monkeypatch)
+    cached = client.get("/company/MSFT/report").json()
+    assert cached["cache"]["cached"] is True
+    assert cached["cache"]["generated_at"].endswith("+00:00"), (
+        f"not UTC: {cached['cache']['generated_at']}"
+    )
+
+
+def test_generated_at_is_utc_on_a_fresh_build(client, monkeypatch):
+    fresh = _cacheable_report(client, monkeypatch).json()
+    assert fresh["cache"]["generated_at"].endswith("+00:00")

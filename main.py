@@ -3,6 +3,7 @@
 from typing import Annotated
 
 from fastapi import FastAPI, Depends, HTTPException, Path, Query, Request
+from fastapi import Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy import text
@@ -25,6 +26,7 @@ import ratelimit
 from config import settings
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+import hashlib
 import json
 import logging
 
@@ -330,6 +332,14 @@ MAX_QUESTION_LENGTH = 500
 # that grows forever while the answer never changes.
 REPORT_QUARTERS = 20
 
+# How long a client may reuse a report without asking again. Deliberately far
+# shorter than the 7-day server-side TTL: the server knows when it rebuilt the
+# payload, a browser does not, and an over-long max-age would leave a stale
+# report pinned in caches with no way to reach it. Short freshness plus an
+# ETag gives the real win anyway - a revalidation costs one 304 with no body,
+# no JSON parse, and no database read of the payload column.
+REPORT_CLIENT_MAX_AGE = 300
+
 QuestionQuery = Annotated[str, Query(max_length=MAX_QUESTION_LENGTH)]
 
 
@@ -437,11 +447,51 @@ def _brief_to_dict(b: Brief) -> dict:
         "grounding_rate": b.grounding_rate,
         "filing_url": b.filing_url,
         "report_date": b.report_date,
-        "cached_at": b.created_at.isoformat() if b.created_at else None,
+        # Brief.created_at is a naive column; _as_utc stamps it so a consumer
+        # is not left guessing which zone the value is in.
+        "cached_at": _as_utc(b.created_at).isoformat() if b.created_at else None,
     }
 
 
 REPORT_MAX_AGE = timedelta(days=7)
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Return an aware datetime expressed in UTC.
+
+    Postgres hands back timestamptz in the SESSION timezone, not in UTC - the
+    same instant written as 18:44:35+00:00 comes back as 14:44:35-04:00 on a
+    connection whose timezone is America/New_York. The instant is correct and
+    comparisons still work, but isoformat() produces a different string, and
+    two things depended on that string: the ETag, which then changed on every
+    request and could never produce a 304, and the tearsheet footer, which
+    renders value[:19] and appends " UTC" - displaying local time under a
+    label asserting it was not.
+
+    A naive value is assumed to be UTC, which is what the column stores.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _report_etag(ticker: str, generated_at: datetime) -> str:
+    """A validator for one company's report as generated at one instant.
+
+    Derived from the generation timestamp rather than from a hash of the body,
+    so it can be computed from the cache row alone - before the payload column
+    is parsed. That is what lets a conditional request be answered without
+    deserializing the report at all.
+    """
+    raw = f"{ticker}|{_as_utc(generated_at).isoformat()}"
+    return '"' + hashlib.sha256(raw.encode()).hexdigest()[:32] + '"'
+
+
+def _cache_headers(etag: str) -> dict[str, str]:
+    return {
+        "ETag": etag,
+        "Cache-Control": f"public, max-age={REPORT_CLIENT_MAX_AGE}, must-revalidate",
+    }
 
 # One try plus one retry. A second failure means the outage is not a blip,
 # and a caller waiting on a report would rather have the computed figures now
@@ -449,8 +499,9 @@ REPORT_MAX_AGE = timedelta(days=7)
 SYNTHESIS_ATTEMPTS = 2
 SYNTHESIS_BACKOFF_SECONDS = 3
 @app.get("/company/{ticker}/report")
-def get_report(request: Request, ticker: TickerPath, refresh: bool = False,
-               token: str | None = None, db: Session = Depends(get_db)):
+def get_report(request: Request, response: Response, ticker: TickerPath,
+               refresh: bool = False, token: str | None = None,
+               db: Session = Depends(get_db)):
     _enforce_rate_limit(request)
     refresh = _refresh_requested(refresh, token)
     company = get_or_ingest_company(ticker, db)
@@ -461,14 +512,23 @@ def get_report(request: Request, ticker: TickerPath, refresh: bool = False,
         .first()
     )
     if cached is not None and not refresh:
-        age = datetime.now(timezone.utc) - cached.generated_at
+        generated_at = _as_utc(cached.generated_at)
+        age = datetime.now(timezone.utc) - generated_at
         if age < REPORT_MAX_AGE:
+            etag = _report_etag(company.ticker, generated_at)
+
+            # Answer a conditional request before touching the payload: no
+            # JSON parse, no body, no bytes on the wire.
+            if request.headers.get("if-none-match") == etag:
+                return Response(status_code=304, headers=_cache_headers(etag))
+
             payload = json.loads(cached.payload)
             payload["cache"] = {
                 "cached": True,
-                "generated_at": cached.generated_at.isoformat(),
+                "generated_at": generated_at.isoformat(),
                 "age_days": round(age.total_seconds() / 86400, 1),
             }
+            response.headers.update(_cache_headers(etag))
             return payload
 
     # cache miss or stale: build it
@@ -545,11 +605,23 @@ def get_report(request: Request, ticker: TickerPath, refresh: bool = False,
         db.commit()
 
     payload["cache"] = {"cached": False, "generated_at": now.isoformat()}
+    if narrative is not None:
+        response.headers.update(_cache_headers(_report_etag(company.ticker, now)))
+    else:
+        # A degraded report was deliberately not persisted so the next request
+        # retries. Letting a client cache it would defeat exactly that.
+        response.headers["Cache-Control"] = "no-store"
     return payload
 
 @app.get("/company/{ticker}/report/view", response_class=HTMLResponse)
-def get_report_view(request: Request, ticker: TickerPath, refresh: bool = False,
-                    token: str | None = None, db: Session = Depends(get_db)):
+def get_report_view(request: Request, response: Response, ticker: TickerPath,
+                    refresh: bool = False, token: str | None = None,
+                    db: Session = Depends(get_db)):
     """The same report, rendered as a readable tearsheet."""
-    report = get_report(request, ticker, refresh=refresh, token=token, db=db)
-    return render_report(report)
+    report = get_report(request, response, ticker, refresh=refresh,
+                        token=token, db=db)
+    # A conditional request short-circuits to 304 before a payload exists;
+    # pass that straight through rather than trying to render it.
+    if isinstance(report, Response):
+        return report
+    return HTMLResponse(render_report(report), headers=dict(response.headers))

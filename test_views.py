@@ -225,3 +225,28 @@ def test_zero_share_price_renders_as_zero():
     r["data"]["price"] = {"price": 0}
     html = render_report(r)
     assert "$0.00" in html
+
+
+# --- the footer timestamp must actually be UTC ---
+#
+# views renders cache.generated_at as `value[:19] + " UTC"`. Postgres returns
+# timestamptz in the session timezone, so a cached report handed back
+# "2026-09-24T14:44:35-04:00" was displayed as "2026-09-24 14:44:35 UTC" -
+# four hours wrong, with a label asserting it was not.
+
+def test_footer_timestamp_is_labelled_utc_only_when_it_is_utc():
+    r = _report_with_health({"survivability": {"verdict": ""}})
+    r["cache"] = {"cached": True, "generated_at": "2026-09-24T18:44:35+00:00"}
+    html = render_report(r)
+    assert "2026-09-24 18:44:35 UTC" in html
+
+
+def test_footer_does_not_mislabel_a_local_timestamp_as_utc():
+    """If a non-UTC offset ever reaches the renderer, it must not be stamped
+    UTC. The payload should never contain one - this is the backstop."""
+    r = _report_with_health({"survivability": {"verdict": ""}})
+    r["cache"] = {"cached": True, "generated_at": "2026-09-24T14:44:35-04:00"}
+    html = render_report(r)
+    assert "2026-09-24 14:44:35 UTC" not in html, (
+        "a local-time value was rendered with a UTC label"
+    )
