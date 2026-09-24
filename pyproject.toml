@@ -1,0 +1,36 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+# Not application code: alembic's env.py and its generated migrations follow
+# alembic's own conventions, and rewriting them to match ours gains nothing.
+exclude = ["alembic/versions", ".venv"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes: undefined names, unused imports, unused variables
+    "I",    # import sorting
+    "B",    # bugbear: likely bugs rather than style
+    "UP",   # pyupgrade: outdated idioms
+    "C4",   # comprehension simplifications
+]
+ignore = [
+    "E501",  # line length is enforced by the formatter, not the linter
+    # Depends(get_db) and Query(...) in a default argument is FastAPI's
+    # documented idiom, not the mutable-default-argument bug B008 targets.
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately import inside functions to keep monkeypatch targets
+# unambiguous and to assert import-time behaviour.
+"test_*.py" = ["E402"]
+"conftest.py" = ["E402"]
+# alembic's env.py imports after the sys.path setup those imports require.
+"alembic/env.py" = ["E402"]
+
+[tool.pytest.ini_options]
+# Without this, pytest walks scripts/ and the virtualenv looking for tests.
+testpaths = ["."]
+norecursedirs = [".venv", "alembic", "scripts", "fixtures", ".git"]

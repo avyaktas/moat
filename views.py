@@ -16,7 +16,7 @@ FORMATTING IS THE POINT
 """
 
 import html
-
+import json
 
 # ---------------------------------------------------------------- shared shell
 #
@@ -122,6 +122,16 @@ def esc(s) -> str:
 # ---------------------------------------------------------------- components
 
 
+# An unrecognised status renders as "unknown" rather than raising. Indexing a
+# literal dict with c["status"] meant a new status value anywhere upstream
+# took down the whole tearsheet with a KeyError.
+_STATE_CLASS = {"PASS": "hold", "FAIL": "breach", "UNKNOWN": "unknown"}
+
+
+def _state_of(check: dict) -> str:
+    return _STATE_CLASS.get(check.get("status"), "unknown")
+
+
 def _wall(checks: list[dict]) -> str:
     """The signature element: the scorecard as a wall.
 
@@ -131,7 +141,7 @@ def _wall(checks: list[dict]) -> str:
     """
     blocks = []
     for c in checks:
-        state = {"PASS": "hold", "FAIL": "breach", "UNKNOWN": "unknown"}[c["status"]]
+        state = _state_of(c)
         blocks.append(
             f'<div class="block {state}" title="{esc(c["name"])}: {esc(c["detail"])}">'
             f'<span class="block-label">{esc(c["name"])}</span></div>'
@@ -142,7 +152,7 @@ def _wall(checks: list[dict]) -> str:
 def _checks_table(checks: list[dict]) -> str:
     rows = []
     for c in checks:
-        state = {"PASS": "hold", "FAIL": "breach", "UNKNOWN": "unknown"}[c["status"]]
+        state = _state_of(c)
         rows.append(
             f'<tr class="{state}">'
             f'<td class="check-mark"></td>'
@@ -167,7 +177,8 @@ def _figures(ttm: dict, valuation: dict, price: dict | None) -> str:
         ("P / FCF", mult(valuation.get("p_fcf"))),
         ("P / E", mult(valuation.get("p_e"))),
         ("Share price",
-         f"${float(price['price']):,.2f}" if price and price.get("price") else "—"),
+         f"${float(price['price']):,.2f}"
+         if price and price.get("price") is not None else "—"),
     ]
     cells = "".join(
         f'<div class="fig"><span class="fig-label">{esc(k)}</span>'
@@ -193,6 +204,11 @@ def _health(health: dict) -> str:
         # json.dumps(default=str) serializer stores numbers as strings, and
         # "1234" > 0 raises TypeError.
         change = float(change) if change is not None else None
+        # A change of exactly zero is a fact - the balance did not move - and
+        # must not render as the em-dash that means "we do not know". money()
+        # already maps None to the em-dash, so passing change straight through
+        # keeps the two cases distinct. Zero gets no up/down colour because it
+        # went in neither direction.
         direction = ""
         if change:
             direction = "up" if change > 0 else "down"
@@ -201,7 +217,7 @@ def _health(health: dict) -> str:
             f"<td>{esc(label)}</td>"
             f'<td class="n">{money(row.get("prior"))}</td>'
             f'<td class="n">{money(row.get("current"))}</td>'
-            f'<td class="n {direction}">{money(change) if change else "—"}</td>'
+            f'<td class="n {direction}">{money(change)}</td>'
             f"</tr>"
         )
     surv = health.get("survivability", {})
@@ -240,6 +256,25 @@ def _risks(risks: list[dict]) -> str:
     return "".join(out)
 
 
+def _timestamp(value: str | None) -> str:
+    """Render an ISO timestamp, labelling it UTC only when it is UTC.
+
+    The footer used to slice the first 19 characters and append " UTC"
+    unconditionally. Postgres returns timestamptz in the session timezone, so
+    a cached report arrived as "2026-09-24T14:44:35-04:00" and was displayed
+    as "2026-09-24 14:44:35 UTC" - four hours wrong, under a label asserting
+    otherwise. The payload now always carries UTC; this refuses to make the
+    claim for anything that does not.
+    """
+    if not value:
+        return ""
+    text = str(value)
+    stamp = esc(text[:19].replace("T", " "))
+    if text.endswith("+00:00") or text.endswith("Z"):
+        return f"{stamp} UTC."
+    return f"{stamp}."
+
+
 def _paragraphs(text: str | None) -> str:
     if not text:
         return ""
@@ -250,7 +285,284 @@ def _paragraphs(text: str | None) -> str:
 # ---------------------------------------------------------------- the page
 
 
-def render_report(report: dict) -> str:
+# The report page's own styles. A plain string with single braces: it is
+# passed to _document() rather than interpolated into an f-string, so the
+# braces no longer have to be doubled - which is what made this block
+# awkward to edit and easy to break.
+_REPORT_CSS = """  .sheet { max-width: 62rem; margin: 0 auto; padding: 4rem 2rem 6rem; }
+
+  /* ---- masthead ---- */
+  .masthead {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 2rem; flex-wrap: wrap;
+    padding-bottom: 1.25rem; border-bottom: 1px solid var(--ink);
+  }
+  .eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 0.5rem;
+  }
+  .eyebrow a { text-decoration: none; border-bottom: 1px solid var(--rule);
+                padding-bottom: 1px; }
+  .eyebrow a:hover { border-color: var(--ink-soft); color: var(--ink); }
+  .ticker {
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: clamp(3rem, 9vw, 5.5rem); line-height: 0.9;
+    letter-spacing: -0.01em; margin: 0;
+  }
+  .company-name {
+    font-size: 0.95rem; color: var(--ink-soft); margin: 0.6rem 0 0;
+  }
+  .verdict {
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-size: clamp(1.5rem, 4vw, 2.25rem); line-height: 1;
+    padding: 0.5rem 0 0.5rem 1.25rem; border-left: 3px solid currentColor;
+  }
+  .verdict.buy    { color: var(--hold); }
+  .verdict.watch  { color: var(--ink); }
+  .verdict.avoid  { color: var(--breach); }
+  .verdict small {
+    display: block; font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 0.35rem;
+  }
+
+  /* ---- the wall: signature element ---- */
+  .wall {
+    display: grid; grid-template-columns: repeat(6, 1fr);
+    gap: 4px; margin: 2.5rem 0 0.75rem; height: 7rem;
+  }
+  .block {
+    position: relative; border: 1.5px solid var(--ink);
+    display: flex; align-items: flex-end;
+  }
+  .block.hold    { background: var(--ink); }
+  .block.breach  { background: transparent; border-color: var(--breach); }
+  .block.unknown {
+    border-color: var(--unknown);
+    background: repeating-linear-gradient(45deg,
+      transparent, transparent 5px, var(--rule) 5px, var(--rule) 6px);
+  }
+  .block-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0.5rem; line-height: 1.2;
+  }
+  .block.hold .block-label   { color: var(--paper); }
+  .block.breach .block-label { color: var(--breach); }
+  .wall-caption {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+    letter-spacing: 0.08em; color: var(--ink-soft); text-transform: uppercase;
+  }
+
+  /* ---- sections ---- */
+  section { margin-top: 3.5rem; }
+  h2 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem; letter-spacing: 0.16em; text-transform: uppercase;
+    font-weight: 500; color: var(--ink-soft);
+    padding-bottom: 0.6rem; border-bottom: 1px solid var(--rule);
+    margin: 0 0 1.5rem;
+  }
+
+  /* ---- checks ---- */
+  table.checks { width: 100%; border-collapse: collapse; }
+  table.checks td { padding: 0.7rem 0; border-bottom: 1px solid var(--rule);
+                     vertical-align: baseline; }
+  .check-mark { width: 1.5rem; }
+  .check-mark::before {
+    content: ''; display: block; width: 9px; height: 9px; border: 1.5px solid;
+  }
+  tr.hold    .check-mark::before { background: var(--hold); border-color: var(--hold); }
+  tr.breach  .check-mark::before { background: transparent; border-color: var(--breach); }
+  tr.unknown .check-mark::before { background: var(--rule); border-color: var(--unknown); }
+  .check-name { width: 12rem; font-weight: 500; }
+  .check-detail { font-family: 'JetBrains Mono', monospace; font-size: 0.82rem;
+                   color: var(--ink-soft); }
+  tr.breach .check-detail { color: var(--breach); }
+
+  /* ---- figures ---- */
+  .figures {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 1px; background: var(--rule); border: 1px solid var(--rule);
+  }
+  .fig { background: var(--paper); padding: 1rem 1.1rem;
+          transition: background 150ms ease; }
+  .fig:hover { background: #FCFBF7; }
+  .fig-label {
+    display: block; font-size: 0.72rem; color: var(--ink-soft);
+    margin-bottom: 0.35rem;
+  }
+  .fig-value {
+    display: block; font-family: 'JetBrains Mono', monospace;
+    font-size: 1.15rem; font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- health ---- */
+  table.health { width: 100%; border-collapse: collapse;
+                  font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+  table.health th {
+    font-family: 'Inter', sans-serif; font-size: 0.72rem; font-weight: 500;
+    color: var(--ink-soft); text-align: left; padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--ink);
+  }
+  table.health td { padding: 0.6rem 0; border-bottom: 1px solid var(--rule); }
+  table.health td:first-child { font-family: 'Inter', sans-serif; }
+  .n { text-align: right; font-variant-numeric: tabular-nums; }
+  .up   { color: var(--hold); }
+  .down { color: var(--breach); }
+  .survivability {
+    margin-top: 1rem; font-size: 0.9rem; color: var(--ink-soft);
+    padding-left: 1rem; border-left: 2px solid var(--rule);
+  }
+
+  /* ---- prose ---- */
+  .prose { max-width: var(--measure); }
+  .prose p { margin: 0 0 1.15rem; }
+  .lede { font-size: 1.05rem; }
+
+  /* ---- risks ---- */
+  .risk { padding: 1.75rem 0; border-bottom: 1px solid var(--rule); }
+  .risk:first-of-type { padding-top: 0; }
+  .risk h3 { font-size: 1rem; font-weight: 600; margin: 0 0 0.9rem;
+              max-width: var(--measure); }
+  .risk blockquote {
+    margin: 0 0 0.5rem; padding-left: 1.1rem;
+    border-left: 2px solid var(--ink); font-size: 0.92rem;
+    color: var(--ink-soft); max-width: var(--measure);
+  }
+  .verified, .unverified {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.65rem;
+    letter-spacing: 0.1em; text-transform: uppercase;
+  }
+  .verified   { color: var(--hold); }
+  .unverified { color: var(--breach); }
+  .trigger { margin: 1rem 0 0; font-size: 0.92rem; max-width: var(--measure); }
+  .trigger-label {
+    display: block; font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--ink-soft); margin-bottom: 0.3rem;
+  }
+
+  /* ---- footer ---- */
+  footer {
+    margin-top: 4rem; padding-top: 1.25rem; border-top: 1px solid var(--ink);
+    font-size: 0.78rem; color: var(--ink-soft);
+  }
+  footer a { color: var(--ink-soft); text-decoration: none;
+              border-bottom: 1px solid var(--rule); }
+  footer a:hover { color: var(--ink); border-color: var(--ink-soft); }
+  footer p { margin: 0.3rem 0; }
+  .disclaimer { margin-top: 1.25rem; font-style: italic; }
+
+  @media (max-width: 40rem) {
+    .sheet { padding: 2.5rem 1.25rem 4rem; }
+    .wall { height: 5rem; }
+    .block-label { font-size: 0.5rem; padding: 0.3rem; }
+    .check-name { width: auto; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .block { transition: background 200ms ease; }
+  }
+
+
+  /* ---- progress, while the report is being built ---- */
+  .progress {
+    list-style: none; margin: 2.5rem 0 0; padding: 0;
+    font-family: 'JetBrains Mono', monospace; font-size: 0.8rem;
+  }
+  .progress li {
+    display: flex; align-items: baseline; gap: 0.75rem;
+    padding: 0.55rem 0; border-bottom: 1px solid var(--rule);
+    color: var(--unknown); transition: color 200ms ease;
+  }
+  .progress .mark {
+    width: 0.9rem; height: 0.9rem; flex: none; border: 1.5px solid currentColor;
+    align-self: center;
+  }
+  .progress .took { margin-left: auto; font-size: 0.72rem; opacity: 0.75; }
+  .progress li[data-state="running"] { color: var(--ink); }
+  .progress li[data-state="running"] .mark {
+    background: var(--ink); border-color: var(--ink);
+    animation: moat-pulse 1.1s ease-in-out infinite;
+  }
+  .progress li[data-state="done"] { color: var(--hold); }
+  .progress li[data-state="done"] .mark {
+    background: var(--hold); border-color: var(--hold);
+  }
+  .progress li[data-state="skipped"] { color: var(--unknown); }
+  .progress li[data-state="skipped"] .mark {
+    background: repeating-linear-gradient(45deg, transparent, transparent 3px,
+      var(--rule) 3px, var(--rule) 4px);
+  }
+  .progress li[data-state="failed"] { color: var(--breach); }
+  .progress li[data-state="failed"] .mark {
+    background: transparent; border-color: var(--breach);
+  }
+
+  @keyframes moat-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+  @media (prefers-reduced-motion: reduce) {
+    .progress li[data-state="running"] .mark { animation: none; }
+    .skeleton::after { animation: none; }
+  }
+
+  /* ---- a narrative section the model has not finished ---- */
+  .pending {
+    display: flex; align-items: center; gap: 0.6rem; margin: 0;
+    font-family: 'JetBrains Mono', monospace; font-size: 0.78rem;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft);
+  }
+  .pending-dot {
+    width: 7px; height: 7px; background: var(--ink-soft); flex: none;
+    animation: moat-pulse 1.1s ease-in-out infinite;
+  }
+  .verdict.none small { color: var(--ink-soft); }
+
+  /* ---- the skeleton shown before any figures exist ---- */
+  .skeleton {
+    position: relative; overflow: hidden;
+    background: var(--rule); height: 7rem; margin: 2.5rem 0 0.75rem;
+  }
+  .skeleton::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.45),
+      transparent);
+    animation: moat-sweep 1.6s ease-in-out infinite;
+  }
+  @keyframes moat-sweep { 0% { transform: translateX(-100%); }
+                          100% { transform: translateX(100%); } }
+
+  /* ---- failure ---- */
+  .failure {
+    margin: 2.5rem 0 0; padding: 1.25rem 1.4rem;
+    border-left: 3px solid var(--breach); background: rgba(180, 70, 47, 0.06);
+  }
+  .failure h2 {
+    border: none; padding: 0; margin: 0 0 0.5rem; color: var(--breach);
+    font-size: 0.75rem;
+  }
+  .failure p { margin: 0; font-size: 0.95rem; }
+  .failure a { color: var(--ink); }
+"""
+
+
+def _pending(label: str) -> str:
+    """A narrative section the model has not finished writing yet."""
+    return (
+        f'<p class="pending"><span class="pending-dot"></span>{esc(label)}</p>'
+    )
+
+
+def _report_sheet(report: dict, pending: bool = False) -> str:
+    """The tearsheet body, with or without a narrative.
+
+    One builder for both states. When pending is true the computed sections
+    render exactly as they finally will - they are already final - and only
+    the narrative sections show that the model is still working. That is what
+    lets the page show real content seconds after the request rather than
+    minutes, without maintaining a second copy of the layout that could drift
+    from this one.
+    """
     data = report.get("data", {})
     ttm = data.get("ttm", {})
     scorecard = data.get("scorecard", {})
@@ -260,7 +572,7 @@ def render_report(report: dict) -> str:
     sources = report.get("sources", {})
     cache = report.get("cache", {})
 
-    verdict = narrative.get("verdict", "NO VERDICT")
+    verdict = narrative.get("verdict", "PENDING" if pending else "NO VERDICT")
     verdict_class = {
         "BUY-CASE": "buy",
         "WATCH-CASE": "watch",
@@ -270,193 +582,23 @@ def render_report(report: dict) -> str:
     grounding = narrative.get("grounding_rate")
     grounding_str = f"{float(grounding) * 100:.0f}%" if grounding is not None else "—"
 
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{esc(report.get("company"))} · Moat</title>
-{_FONTS}
-<style>{_TOKENS}
-  .sheet {{ max-width: 62rem; margin: 0 auto; padding: 4rem 2rem 6rem; }}
+    # esc(None) is the empty string, so an absent filing URL produced
+    # href="" - a link back to the current page, which reads as working and
+    # is not. With no URL there is nothing to link to, so say so in text.
+    filing_url = sources.get("filing")
+    if filing_url:
+        filing_line = (
+            f'<a href="{esc(filing_url)}">10-K filed '
+            f'{esc(sources.get("report_date"))}</a>'
+        )
+    else:
+        filing_line = "10-K unavailable"
 
-  /* ---- masthead ---- */
-  .masthead {{
-    display: flex; align-items: flex-end; justify-content: space-between;
-    gap: 2rem; flex-wrap: wrap;
-    padding-bottom: 1.25rem; border-bottom: 1px solid var(--ink);
-  }}
-  .eyebrow {{
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--ink-soft); margin-bottom: 0.5rem;
-  }}
-  .eyebrow a {{ text-decoration: none; border-bottom: 1px solid var(--rule);
-                padding-bottom: 1px; }}
-  .eyebrow a:hover {{ border-color: var(--ink-soft); color: var(--ink); }}
-  .ticker {{
-    font-family: 'Instrument Serif', Georgia, serif;
-    font-size: clamp(3rem, 9vw, 5.5rem); line-height: 0.9;
-    letter-spacing: -0.01em; margin: 0;
-  }}
-  .company-name {{
-    font-size: 0.95rem; color: var(--ink-soft); margin: 0.6rem 0 0;
-  }}
-  .verdict {{
-    font-family: 'Instrument Serif', Georgia, serif;
-    font-size: clamp(1.5rem, 4vw, 2.25rem); line-height: 1;
-    padding: 0.5rem 0 0.5rem 1.25rem; border-left: 3px solid currentColor;
-  }}
-  .verdict.buy    {{ color: var(--hold); }}
-  .verdict.watch  {{ color: var(--ink); }}
-  .verdict.avoid  {{ color: var(--breach); }}
-  .verdict small {{
-    display: block; font-family: 'JetBrains Mono', monospace;
-    font-size: 0.65rem; letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--ink-soft); margin-bottom: 0.35rem;
-  }}
-
-  /* ---- the wall: signature element ---- */
-  .wall {{
-    display: grid; grid-template-columns: repeat(6, 1fr);
-    gap: 4px; margin: 2.5rem 0 0.75rem; height: 7rem;
-  }}
-  .block {{
-    position: relative; border: 1.5px solid var(--ink);
-    display: flex; align-items: flex-end;
-  }}
-  .block.hold    {{ background: var(--ink); }}
-  .block.breach  {{ background: transparent; border-color: var(--breach); }}
-  .block.unknown {{
-    border-color: var(--unknown);
-    background: repeating-linear-gradient(45deg,
-      transparent, transparent 5px, var(--rule) 5px, var(--rule) 6px);
-  }}
-  .block-label {{
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.6rem; letter-spacing: 0.08em; text-transform: uppercase;
-    padding: 0.5rem; line-height: 1.2;
-  }}
-  .block.hold .block-label   {{ color: var(--paper); }}
-  .block.breach .block-label {{ color: var(--breach); }}
-  .wall-caption {{
-    font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
-    letter-spacing: 0.08em; color: var(--ink-soft); text-transform: uppercase;
-  }}
-
-  /* ---- sections ---- */
-  section {{ margin-top: 3.5rem; }}
-  h2 {{
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.72rem; letter-spacing: 0.16em; text-transform: uppercase;
-    font-weight: 500; color: var(--ink-soft);
-    padding-bottom: 0.6rem; border-bottom: 1px solid var(--rule);
-    margin: 0 0 1.5rem;
-  }}
-
-  /* ---- checks ---- */
-  table.checks {{ width: 100%; border-collapse: collapse; }}
-  table.checks td {{ padding: 0.7rem 0; border-bottom: 1px solid var(--rule);
-                     vertical-align: baseline; }}
-  .check-mark {{ width: 1.5rem; }}
-  .check-mark::before {{
-    content: ''; display: block; width: 9px; height: 9px; border: 1.5px solid;
-  }}
-  tr.hold    .check-mark::before {{ background: var(--hold); border-color: var(--hold); }}
-  tr.breach  .check-mark::before {{ background: transparent; border-color: var(--breach); }}
-  tr.unknown .check-mark::before {{ background: var(--rule); border-color: var(--unknown); }}
-  .check-name {{ width: 12rem; font-weight: 500; }}
-  .check-detail {{ font-family: 'JetBrains Mono', monospace; font-size: 0.82rem;
-                   color: var(--ink-soft); }}
-  tr.breach .check-detail {{ color: var(--breach); }}
-
-  /* ---- figures ---- */
-  .figures {{
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-    gap: 1px; background: var(--rule); border: 1px solid var(--rule);
-  }}
-  .fig {{ background: var(--paper); padding: 1rem 1.1rem;
-          transition: background 150ms ease; }}
-  .fig:hover {{ background: #FCFBF7; }}
-  .fig-label {{
-    display: block; font-size: 0.72rem; color: var(--ink-soft);
-    margin-bottom: 0.35rem;
-  }}
-  .fig-value {{
-    display: block; font-family: 'JetBrains Mono', monospace;
-    font-size: 1.15rem; font-variant-numeric: tabular-nums;
-  }}
-
-  /* ---- health ---- */
-  table.health {{ width: 100%; border-collapse: collapse;
-                  font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }}
-  table.health th {{
-    font-family: 'Inter', sans-serif; font-size: 0.72rem; font-weight: 500;
-    color: var(--ink-soft); text-align: left; padding-bottom: 0.6rem;
-    border-bottom: 1px solid var(--ink);
-  }}
-  table.health td {{ padding: 0.6rem 0; border-bottom: 1px solid var(--rule); }}
-  table.health td:first-child {{ font-family: 'Inter', sans-serif; }}
-  .n {{ text-align: right; font-variant-numeric: tabular-nums; }}
-  .up   {{ color: var(--hold); }}
-  .down {{ color: var(--breach); }}
-  .survivability {{
-    margin-top: 1rem; font-size: 0.9rem; color: var(--ink-soft);
-    padding-left: 1rem; border-left: 2px solid var(--rule);
-  }}
-
-  /* ---- prose ---- */
-  .prose {{ max-width: var(--measure); }}
-  .prose p {{ margin: 0 0 1.15rem; }}
-  .lede {{ font-size: 1.05rem; }}
-
-  /* ---- risks ---- */
-  .risk {{ padding: 1.75rem 0; border-bottom: 1px solid var(--rule); }}
-  .risk:first-of-type {{ padding-top: 0; }}
-  .risk h3 {{ font-size: 1rem; font-weight: 600; margin: 0 0 0.9rem;
-              max-width: var(--measure); }}
-  .risk blockquote {{
-    margin: 0 0 0.5rem; padding-left: 1.1rem;
-    border-left: 2px solid var(--ink); font-size: 0.92rem;
-    color: var(--ink-soft); max-width: var(--measure);
-  }}
-  .verified, .unverified {{
-    font-family: 'JetBrains Mono', monospace; font-size: 0.65rem;
-    letter-spacing: 0.1em; text-transform: uppercase;
-  }}
-  .verified   {{ color: var(--hold); }}
-  .unverified {{ color: var(--breach); }}
-  .trigger {{ margin: 1rem 0 0; font-size: 0.92rem; max-width: var(--measure); }}
-  .trigger-label {{
-    display: block; font-family: 'JetBrains Mono', monospace;
-    font-size: 0.65rem; letter-spacing: 0.1em; text-transform: uppercase;
-    color: var(--ink-soft); margin-bottom: 0.3rem;
-  }}
-
-  /* ---- footer ---- */
-  footer {{
-    margin-top: 4rem; padding-top: 1.25rem; border-top: 1px solid var(--ink);
-    font-size: 0.78rem; color: var(--ink-soft);
-  }}
-  footer a {{ color: var(--ink-soft); text-decoration: none;
-              border-bottom: 1px solid var(--rule); }}
-  footer a:hover {{ color: var(--ink); border-color: var(--ink-soft); }}
-  footer p {{ margin: 0.3rem 0; }}
-  .disclaimer {{ margin-top: 1.25rem; font-style: italic; }}
-
-  @media (max-width: 40rem) {{
-    .sheet {{ padding: 2.5rem 1.25rem 4rem; }}
-    .wall {{ height: 5rem; }}
-    .block-label {{ font-size: 0.5rem; padding: 0.3rem; }}
-    .check-name {{ width: auto; }}
-  }}
-  @media (prefers-reduced-motion: no-preference) {{
-    .block {{ transition: background 200ms ease; }}
-  }}
-</style>
-</head>
-<body>
-<div class="sheet">
+    # id="sheet" on every rendering of the sheet, not just the shell's. The
+    # page swaps this element out as each stage lands, so the anchor has to
+    # survive the swap - without it the partial replaced the only element
+    # carrying the id, and the done handler then had nothing to replace.
+    body = f"""<div class="sheet" id="sheet">
 
   <header class="masthead">
     <div>
@@ -494,40 +636,53 @@ def render_report(report: dict) -> str:
 
   <section>
     <h2>Hype versus reality</h2>
-    <div class="prose lede">{_paragraphs(narrative.get("hype_vs_reality"))}</div>
+    <div class="prose lede">{_pending("Writing analysis\u2026") if pending
+        else _paragraphs(narrative.get("hype_vs_reality"))}</div>
   </section>
 
   <section>
     <h2>Risks and sell triggers</h2>
-    {_risks(narrative.get("risks", []))}
+    {_pending("Reading the risk factors\u2026") if pending
+        else _risks(narrative.get("risks", []))}
   </section>
 
   <section>
     <h2>The case</h2>
-    <div class="prose">{_paragraphs(narrative.get("reasoning"))}</div>
+    <div class="prose">{_pending("Writing analysis\u2026") if pending
+        else _paragraphs(narrative.get("reasoning"))}</div>
   </section>
 
   <section>
     <h2>The strategy</h2>
-    <div class="prose">{_paragraphs(narrative.get("strategy"))}</div>
+    <div class="prose">{_pending("Writing analysis\u2026") if pending
+        else _paragraphs(narrative.get("strategy"))}</div>
   </section>
 
   <footer>
     <p>Financials from {esc(sources.get("financials"))}.
        Price from {esc(sources.get("price"))}.</p>
-    <p>Filing: <a href="{esc(sources.get("filing"))}">10-K filed
-       {esc(sources.get("report_date"))}</a> ·
-       {grounding_str} of quotes verified against the source document.</p>
+    <p>Filing: {filing_line}{"" if pending else
+       f" · {grounding_str} of quotes verified against the source document."}</p>
     <p>{"Cached" if cache.get("cached") else "Generated"}
-       {esc(cache.get("generated_at", ""))[:19].replace("T", " ")} UTC.</p>
+       {_timestamp(cache.get("generated_at"))}</p>
     <p class="disclaimer">This is a screen against stated criteria, not
        investment advice. Every figure is computed from filed data; the
        narrative interprets those figures and does not calculate them.</p>
   </footer>
 
 </div>
-</body>
-</html>"""
+"""
+    return body
+
+
+def render_report(report: dict) -> str:
+    """The finished tearsheet, as a complete page."""
+    return _document(
+        f'{esc(report.get("company"))} \u00b7 Moat',
+        _report_sheet(report),
+        _REPORT_CSS,
+    )
+
 
 
 # ---------------------------------------------------------------- landing page
@@ -570,6 +725,13 @@ def render_landing() -> str:
         padding: 0 1.5rem; cursor: pointer; transition: background 150ms ease;
       }
       form.search button:hover { background: var(--hold); }
+      .searching {
+        margin: 0.9rem 0 0; min-height: 1.2rem;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+        letter-spacing: 0.08em; color: var(--hold);
+      }
+      form.search button:disabled { background: var(--hold); cursor: default; }
+      form.search input:disabled { color: var(--ink-soft); }
       .examples {
         margin-top: 1.9rem; font-family: 'JetBrains Mono', monospace;
         font-size: 0.75rem; letter-spacing: 0.06em; color: var(--ink-soft);
@@ -605,8 +767,9 @@ def render_landing() -> str:
           <input id="t" name="t" placeholder="Ticker &mdash; e.g. MSFT"
                  aria-label="Ticker" autocomplete="off" autocapitalize="characters"
                  autocorrect="off" spellcheck="false">
-          <button type="submit">Analyze</button>
+          <button type="submit" id="go">Analyze</button>
         </form>
+        <p class="searching" id="searching" aria-live="polite"></p>
         <p class="examples">Try
           <a href="/company/MSFT/report/view">MSFT</a>
           <a href="/company/AAPL/report/view">AAPL</a>
@@ -627,6 +790,15 @@ def render_landing() -> str:
         e.preventDefault();
         var t = inp.value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '');
         if (!t) { inp.focus(); return false; }
+        // Acknowledge the submit before navigating. The next page answers in
+        // milliseconds, but "milliseconds" is not "immediately", and a button
+        // that does nothing visible when pressed is the whole complaint.
+        var btn = document.getElementById('go');
+        btn.textContent = 'Loading ' + t;
+        btn.disabled = true;
+        inp.disabled = true;
+        document.getElementById('searching').textContent =
+          'Opening ' + t + '\u2026';
         window.location.href = '/company/' + encodeURIComponent(t) + '/report/view';
         return false;
       }
@@ -673,3 +845,151 @@ def render_not_found(detail: str) -> str:
     </div></div>
     """
     return _document("Not found · Moat", body, css)
+
+# ---------------------------------------------------- the progressive report
+#
+# A cold ticker takes around thirty seconds, almost all of it the model
+# writing. The page used to be a blank document for that whole time, because
+# the browser was simply waiting on the response. These three renderers turn
+# it into something that shows what it knows the moment it knows it.
+
+
+def _progress_list(active: str = "fetch") -> str:
+    """The stage checklist, with one stage already running.
+
+    Rendered server-side so the sequence is visible in the very first byte the
+    browser receives, rather than appearing once JavaScript has run.
+    """
+    stages = [
+        ("fetch", "Fetching SEC filings"),
+        ("store", "Storing financials"),
+        ("metrics", "Computing metrics"),
+        ("synthesis", "Writing analysis"),
+    ]
+    items = []
+    for key, label in stages:
+        state = "running" if key == active else "pending"
+        items.append(
+            f'<li data-stage="{key}" data-state="{state}">'
+            f'<span class="mark"></span><span class="label">{esc(label)}</span>'
+            f'<span class="took"></span></li>'
+        )
+    return f'<ul class="progress" id="progress">{"".join(items)}</ul>'
+
+
+def render_report_fragment(report: dict, pending: bool = False) -> str:
+    """The sheet on its own, for swapping into a page already on screen."""
+    return _report_sheet(report, pending=pending)
+
+
+def render_failure(title: str, detail: str) -> str:
+    """An error the reader can act on, in the report's own styling."""
+    return f"""
+    <div class="failure">
+      <h2>{esc(title)}</h2>
+      <p>{esc(detail)}</p>
+      <p style="margin-top:0.9rem"><a href="/">&larr; Back to search</a></p>
+    </div>
+    """
+
+
+def render_report_shell(ticker: str) -> str:
+    """The page served immediately while the report is built.
+
+    It carries the masthead and the stage checklist so there is something real
+    on screen in the first response, then connects to the stream and replaces
+    itself as each stage completes: the computed figures arrive at about two
+    seconds, the narrative when the model is done.
+
+    EventSource rather than polling: the server already knows when each stage
+    finishes, so there is nothing to discover by asking repeatedly, and no job
+    record to store or clean up.
+    """
+    safe = esc(ticker.upper())
+    body = f"""<div class="sheet" id="sheet">
+
+  <header class="masthead">
+    <div>
+      <p class="eyebrow"><a href="/">Moat</a> · Filing analysis</p>
+      <h1 class="ticker">{safe}</h1>
+      <p class="company-name">Building this report&hellip;</p>
+    </div>
+    <div class="verdict none">
+      <small>Framework verdict</small>
+      PENDING
+    </div>
+  </header>
+
+  <div class="skeleton" aria-hidden="true"></div>
+
+  {_progress_list()}
+
+  <noscript>
+    <p class="wall-caption" style="margin-top:1.5rem">
+      This page builds the report as it loads and needs JavaScript.
+      The same analysis is available as JSON at
+      <a href="/company/{safe}/report">/company/{safe}/report</a>.
+    </p>
+  </noscript>
+
+</div>
+<script>
+(function () {{
+  var sheet = document.getElementById('sheet');
+  var source = new EventSource({json.dumps(f"/company/{ticker.upper()}/report/stream")});
+  var settled = false;
+
+  function setStage(stage) {{
+    var li = document.querySelector('[data-stage="' + stage.key + '"]');
+    if (!li) return;
+    li.setAttribute('data-state', stage.state);
+    if (stage.seconds !== undefined) {{
+      li.querySelector('.took').textContent = stage.seconds.toFixed(1) + 's';
+    }}
+    if (stage.detail) {{
+      li.querySelector('.label').textContent = stage.label + ' — ' + stage.detail;
+    }}
+  }}
+
+  source.addEventListener('stage', function (e) {{
+    setStage(JSON.parse(e.data));
+  }});
+
+  // The computed figures, ready long before the narrative. Replacing the
+  // whole sheet keeps one source of truth for the layout: the server renders
+  // it, the page swaps it in.
+  source.addEventListener('partial', function (e) {{
+    sheet.outerHTML = JSON.parse(e.data).html;
+  }});
+
+  source.addEventListener('done', function (e) {{
+    settled = true;
+    document.getElementById('sheet').outerHTML = JSON.parse(e.data).html;
+    source.close();
+  }});
+
+  source.addEventListener('failed', function (e) {{
+    settled = true;
+    var payload = JSON.parse(e.data);
+    var target = document.getElementById('sheet') || document.body;
+    target.insertAdjacentHTML('beforeend', payload.html);
+    var running = document.querySelector('[data-state="running"]');
+    if (running) running.setAttribute('data-state', 'failed');
+    source.close();
+  }});
+
+  // A dropped connection must not leave the page spinning forever.
+  source.onerror = function () {{
+    if (settled) return;
+    settled = true;
+    source.close();
+    var target = document.getElementById('sheet') || document.body;
+    target.insertAdjacentHTML('beforeend',
+      {json.dumps(render_failure(
+          "Connection lost",
+          "The connection to the server dropped before the report was "
+          "finished. Reloading will pick up from wherever it got to."))});
+  }};
+}})();
+</script>"""
+    return _document(f"{safe} · Moat", body, _REPORT_CSS)

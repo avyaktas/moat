@@ -1,8 +1,8 @@
 """ Local sentence embeddings for semantic search over filings.
 
-Uses all-MiniLM-L6-v2 via sentence-transformers: 384 dimensiojns, 
-~90MB, runs on CPU in ms. Local rather than API so theres no second
-ket, per-querycost, or network dependancy at query time. 
+Uses all-MiniLM-L6-v2 via sentence-transformers: 384 dimensions, 
+~90MB, runs on CPU in ms. Local rather than an API so there is no second
+key, per-query cost, or network dependency at query time. 
 
 Model cached a module level - loading takes a few seconds and downloads
 ~90MB on first use so tests that dont need embeddings never trigger it.
@@ -20,7 +20,7 @@ def get_model():
     return SentenceTransformer(MODEL_NAME)
 
 def embed(texts: list[str]) -> list[list[float]]:
-    '''Embed a list of texts into 384-dim vectos'''
+    '''Embed a list of texts into 384-dim vectors'''
     model = get_model()
     return model.encode(texts, show_progress_bar=False).tolist()
 

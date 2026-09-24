@@ -26,7 +26,8 @@ THE VERDICT IS A FRAMEWORK CONCLUSION, NOT ADVICE
 
 import json
 
-from analysis import answer_question, check_quote
+from analysis import check_quote
+from llm import get_client
 from metrics import (
     debt_to_equity,
     fcf_margin,
@@ -36,6 +37,8 @@ from metrics import (
     ttm,
 )
 from scoring import build_scorecard
+from serialization import to_jsonable
+
 
 def _f(v) -> float | None:
     """Decimal (from Numeric columns) to float, preserving None.
@@ -144,6 +147,46 @@ def build_report_data(rows: list, price_data: dict | None) -> dict:
     }
 
 
+SYNTHESIS_MODEL = "claude-sonnet-5"
+
+# Measured on NVDA's FY2026 risk factors: 2,978 output tokens against the
+# previous 4,000 cap. That headroom is too thin for a prompt that asks for
+# three to six verbatim quotes plus several paragraphs - a slightly longer
+# filing pushes it over, the JSON is cut mid-string, and the entire 32-second
+# call is wasted. Raising the ceiling does not ask the model for more; it
+# stops cutting off what it was already asked to produce.
+SYNTHESIS_MAX_TOKENS = 8000
+
+
+class SynthesisError(RuntimeError):
+    """Synthesis did not produce a usable narrative.
+
+    Raised rather than returned. The caller decides whether a report can be
+    served without a narrative, and it must not be able to confuse a failure
+    with a result: returning {"error": ...} meant main.py's
+    `if narrative is not None` cache guard saw a truthy value and persisted a
+    NO VERDICT report for the full 7-day TTL.
+
+    `raw` keeps the model's unparsed reply, which is the only thing worth
+    having when a response will not parse.
+    """
+
+    def __init__(self, message: str, raw: str | None = None):
+        super().__init__(message)
+        self.raw = raw
+
+
+class SynthesisTruncated(SynthesisError):
+    """The model ran out of output budget mid-response.
+
+    A subclass of SynthesisError so existing handlers still degrade the report
+    rather than 500, but distinguishable so the retry logic can decline to
+    repeat a call that will fail the same way. This is the one synthesis
+    failure that is deterministic: the prompt and the cap have not changed, so
+    neither will the outcome.
+    """
+
+
 SYNTHESIS_PROMPT = """You are analyzing a company as a business owner would - \
 someone buying a piece of a business to hold for five to ten years, not a trader \
 chasing momentum. Price and value are different things. A falling price is not a \
@@ -208,14 +251,17 @@ def synthesize(report_data: dict, filing_text: str, company_name: str,
     Returns the narrative plus per-quote verification, so the same grounding
     guarantee that applies to briefs applies here: a quote that is not in the
     filing was fabricated, and the code says so.
+
+    Raises SynthesisError if the model's reply will not parse. Failure is a
+    raise, never a return value, so the caller cannot cache it by accident.
     """
-    from anthropic import Anthropic
+    client = client or get_client()
 
-    from config import settings
-
-    client = client or Anthropic(api_key=settings.anthropic_key)
-
-    figures = json.dumps(report_data, indent=2, default=str)
+    # default=to_jsonable, not default=str. The same boundary that guards the
+    # cache write guards the prompt: Decimals arrive as numbers rather than as
+    # 28-digit strings, and an unexpected type fails here instead of being
+    # quietly handed to the model as text.
+    figures = json.dumps(report_data, indent=2, default=to_jsonable)
     user_message = (
         f"<company>{company_name}</company>\n\n"
         f"<computed_figures>\n{figures}\n</computed_figures>\n\n"
@@ -223,8 +269,8 @@ def synthesize(report_data: dict, filing_text: str, company_name: str,
     )
 
     response = client.messages.create(
-        model="claude-sonnet-5",
-        max_tokens=4000,
+        model=SYNTHESIS_MODEL,
+        max_tokens=SYNTHESIS_MAX_TOKENS,
         system=SYNTHESIS_PROMPT,
         messages=[{"role": "user", "content": user_message}],
     )
@@ -232,13 +278,34 @@ def synthesize(report_data: dict, filing_text: str, company_name: str,
     text_blocks = [b.text for b in response.content if b.type == "text"]
     raw = text_blocks[0].strip() if text_blocks else ""
 
+    # A truncated response is a different failure from a malformed one, and
+    # the difference matters to the caller: re-sending the same prompt
+    # truncates again at the same place. Observed on NVDA, where both attempts
+    # failed identically and the report degraded after two full calls.
+    # getattr because several test stubs return a response without the field.
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        raise SynthesisTruncated(
+            f"Model response hit max_tokens ({SYNTHESIS_MAX_TOKENS}) and was "
+            f"cut off; retrying the same prompt would truncate again",
+            raw=raw,
+        )
+
     import re
     cleaned = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
 
+    # strict=False allows raw control characters inside strings. A model
+    # copying a passage out of a filing writes the line break literally
+    # rather than escaping it, and the default parser rejects the entire
+    # response over it. Observed live on the first real report generated
+    # after this audit: "Invalid control character at: line 36 column 864".
+    # Discarding a usable analysis over a character with no semantic content
+    # is the wrong trade; genuinely malformed JSON still fails.
     try:
-        parsed = json.loads(cleaned)
+        parsed = json.loads(cleaned, strict=False)
     except json.JSONDecodeError as e:
-        return {"error": f"Model response was not valid JSON: {e}", "raw": raw}
+        raise SynthesisError(
+            f"Model response was not valid JSON: {e}", raw=raw
+        ) from e
 
     # Verify every quote the model attached to a risk.
     risks = parsed.get("risks", [])

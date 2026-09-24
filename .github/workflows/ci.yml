@@ -5,13 +5,35 @@ on:
     branches: [main]
   pull_request:
 
+# A new push makes an in-flight run for the same ref obsolete. Without this,
+# runs queue up behind each other and the feedback arrives after it mattered.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install ruff==0.14.5
+      - name: Lint
+        run: ruff check .
+
   test:
     runs-on: ubuntu-latest
+    # The suite runs in under two seconds; ten minutes is generous even with
+    # a cold dependency cache. A job with no timeout can hang for six hours.
+    timeout-minutes: 10
 
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: postgres:16
         env:
           POSTGRES_USER: moat
           POSTGRES_PASSWORD: moat
@@ -37,7 +59,36 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
+
+      # Nothing previously ran the migrations. conftest builds the schema with
+      # Base.metadata.create_all, so the models and the migration history
+      # could drift apart indefinitely without any test noticing - and they
+      # had. `alembic check` fails when the models imply a migration that has
+      # not been generated, which is the drift itself rather than a symptom.
+      - name: Apply migrations to an empty database
+        run: alembic upgrade head
+
+      - name: Check the models and migrations agree
+        run: alembic check
 
       - name: Run tests
-        run: pytest -v
+        run: pytest -q
+
+      # Free, deterministic, offline. It replays recorded model responses
+      # through the real grounding path, so the guarantee the project rests on
+      # is checked on every push rather than only when someone spends money on
+      # evaluate.py. See grounding_replay.py for the split.
+      - name: Grounding replay
+        run: python grounding_replay.py
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      # The image is how this deploys, so a Dockerfile that does not build is
+      # a broken deploy discovered at deploy time. Build only - nothing is
+      # pushed anywhere.
+      - name: Build the image
+        run: docker build -t moat:ci .

@@ -1,19 +1,19 @@
-"""This file is the EDGAR ingestion pipeline: it fetches real filled financials
+"""This file is the EDGAR ingestion pipeline: it fetches real filed financials
 from the SEC and writes it into the database.
 
 1. FETCH (fetch_company_facts)
-    Calls the SEC's EDGAR API for a company, udentified by its CIK.
-    THe CIK it the SEC's company ID, 0-padded to 10 digits. 
+    Calls the SEC's EDGAR API for a company, identified by its CIK.
+    The CIK is the SEC's company ID, 0-padded to 10 digits. 
     Then it returns a JSON containing every numeric fact the comapany has
     ever filed (revenue, income, assets, etc.) across all years and filings. 
-    no API key needed but the SEC needs my name and emial. 
+    no API key needed but the SEC needs my name and email. 
     raise_for_status() makes a bad HTTP response fail loudly. 
     
 2. EXTRACT (extract_quarterly)
-    The raw JSOn has a GAAP tag for each concept and the same period
+    The raw JSON has a GAAP tag for each concept and the same period
     can appear many times, so keep only the entries that are filed
     quarterly. It uses the SEC's canonical-period marker which filter
-    the annual duplicates. The fates arrive as strings and then parsed into 
+    the annual duplicates. The dates arrive as strings and are then parsed into
     python date objects. 
     Output per tag: {period_end_date: value}
     {} if gaps in data
@@ -28,24 +28,30 @@ from the SEC and writes it into the database.
     
 4. LOAD (part of ingest_company)
     Looks up company by ticker, creating it if new. 
-    For each period: skip if a row for (company, period) alr exists. 
-    Makes scripd idempotent: safe to run repeatedlt, reruns write 0 new rows.
+    For each period: skip if a row for (company, period) already exists. 
+    Makes the script idempotent: safe to run repeatedly; reruns write 0 new rows.
     
 """
 
-import requests
-from sqlalchemy.orm import Session
+import logging
 from datetime import date
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+import requests
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+import timing
 from database import SessionLocal
 from models import Company, Financials
 
+logger = logging.getLogger(__name__)
+
 HEADERS = {"User-Agent": "Avyakta Sharma avyaktansharma@gmail.com"}
 
-# metric we are looking for
+# the metrics we are looking for
 
-# split in two se we can get Q4
+# split in two so we can derive Q4
 FLOW_TAGS = {
     "revenue": [
         "RevenueFromContractWithCustomerExcludingAssessedTax",
@@ -231,21 +237,76 @@ def get_cik(ticker: str) -> tuple[str, str]:
         raise ValueError(f"Unknown ticker: {ticker}")
     return _ticker_cache[ticker]
 
-def ingest_company(ticker: str, sector: str | None = None) -> int:
-    """Fetch EDGAR data for one company and upsert financials. Returns rows written."""
-    cik, name = get_cik(ticker)
-    facts = fetch_company_facts(cik)
+def fetch_financials(ticker: str) -> tuple[str, str, dict]:
+    """Fetch and extract one company's financials. Network and CPU only.
 
-    series = {}
-    for key, tags in FLOW_TAGS.items():
-        # Standalone quarters, then fill cumulative filers' interim Q2/Q3 by
-        # differencing the YTD chain, then derive the fourth quarter.
-        quarterly = extract_quarterly(facts, tags)
-        quarterly = derive_interim_quarters(quarterly, extract_ytd(facts, tags))
-        series[key] = derive_q4(quarterly, extract_annual(facts, tags))
-    for key, tags in SNAPSHOT_TAGS.items():
-        series[key] = extract_quarterly(facts, tags)
-    all_periods = set()
+    Returns (cik, registered_name, series) where series maps each metric to
+    {period_end: value}. Touches no database, holds no session, and shares no
+    mutable state beyond the process-wide CIK cache - so it is safe to run in
+    a worker thread alongside the filing and price fetches, which is what
+    lets those three happen at once instead of in series.
+
+    Split out of ingest_company for exactly that reason. The work divides
+    cleanly: everything here is "ask EDGAR and do arithmetic", everything in
+    store_financials is "write rows".
+    """
+    ticker = ticker.upper()
+    with timing.stage("edgar.cik"):
+        cik, name = get_cik(ticker)
+    with timing.stage("edgar.facts"):
+        facts = fetch_company_facts(cik)
+
+    with timing.stage("edgar.extract"):
+        series = {}
+        for key, tags in FLOW_TAGS.items():
+            # Standalone quarters, then fill cumulative filers' interim Q2/Q3 by
+            # differencing the YTD chain, then derive the fourth quarter.
+            quarterly = extract_quarterly(facts, tags)
+            quarterly = derive_interim_quarters(quarterly, extract_ytd(facts, tags))
+            series[key] = derive_q4(quarterly, extract_annual(facts, tags))
+        for key, tags in SNAPSHOT_TAGS.items():
+            series[key] = extract_quarterly(facts, tags)
+
+    return cik, name, series
+
+
+def _row_values(company_id: int, period, series: dict) -> dict:
+    """The financials row for one period, with the two derived columns.
+
+    Both derivations keep the unknown-is-not-zero rule: free cash flow needs
+    both operating cash flow and capex, and total debt needs at least one of
+    its two components. Missing inputs leave the column NULL rather than
+    reporting a partial figure as a whole one.
+    """
+    ocf = series["operating_cash_flow"].get(period)
+    capex = series["capex"].get(period)
+    fcf = (ocf - capex) if (ocf is not None and capex is not None) else None
+
+    dc = series["debt_current"].get(period)
+    dnc = series["debt_noncurrent"].get(period)
+    total_debt = (dc or 0) + (dnc or 0) if (dc is not None or dnc is not None) else None
+
+    return {
+        "company_id": company_id,
+        "period_end": period,
+        "revenue": series["revenue"].get(period),
+        "net_income": series["net_income"].get(period),
+        "free_cash_flow": fcf,
+        "total_debt": total_debt,
+        "shareholders_equity": series["equity"].get(period),
+        "cash": series["cash"].get(period),
+        "short_term_investments": series["short_term_investments"].get(period),
+    }
+
+
+def store_financials(ticker: str, name: str, series: dict,
+                     sector: str | None = None) -> int:
+    """Upsert a company and its quarterly financials. Database only.
+
+    Returns the number of periods written.
+    """
+    ticker = ticker.upper()
+    all_periods: set = set()
     for s in series.values():
         all_periods.update(s.keys())
 
@@ -255,45 +316,70 @@ def ingest_company(ticker: str, sector: str | None = None) -> int:
         if company is None:
             company = Company(ticker=ticker, name=name, sector=sector)
             db.add(company)
-            db.flush()
+            try:
+                db.flush()
+            except IntegrityError:
+                # Another request ingested the same cold ticker between the
+                # SELECT and the INSERT. companies.ticker is unique, so one of
+                # them loses - and losing is fine, the row it wanted now
+                # exists. Rolling back and re-reading is the whole recovery.
+                #
+                # Without this the loser raised, and worse, its caller went on
+                # holding a Company whose id belonged to a transaction that
+                # had been rolled back: the report write then failed with a
+                # foreign key violation naming a company that never existed.
+                db.rollback()
+                company = db.query(Company).filter(Company.ticker == ticker).one()
+                logger.info("company %s was created concurrently; using id %s",
+                            ticker, company.id)
 
-        processed = 0
-        for period in sorted(all_periods):
-            ocf = series["operating_cash_flow"].get(period)
-            capex = series["capex"].get(period)
-            fcf = (ocf - capex) if (ocf is not None and capex is not None) else None
-
-            dc = series["debt_current"].get(period)
-            dnc = series["debt_noncurrent"].get(period)
-            if dc is not None or dnc is not None:
-                total_debt = (dc or 0) + (dnc or 0)
-            else:
-                total_debt = None
-
-            values = {
-                "company_id": company.id,
-                "period_end": period,
-                "revenue": series["revenue"].get(period),
-                "net_income": series["net_income"].get(period),
-                "free_cash_flow": fcf,
-                "total_debt": total_debt,
-                "shareholders_equity": series["equity"].get(period),
-                "cash": series["cash"].get(period),
-                "short_term_investments": series["short_term_investments"].get(period),
-            }
-
-            stmt = pg_insert(Financials).values(**values)
-            stmt = stmt.on_conflict_do_update(
-                constraint="uq_company_period",
-                set_={k: v for k, v in values.items() if k not in ("company_id", "period_end")},
-            )
-            db.execute(stmt)
-            processed += 1
-
-        db.commit()
-        return processed
+        with timing.stage("db.financials_write"):
+            rows = [_row_values(company.id, period, series)
+                    for period in sorted(all_periods)]
+            if rows:
+                # One multi-row upsert rather than one statement per period.
+                # The loop this replaces issued 77 separate round trips for a
+                # company with a long filing history - invisible against local
+                # Postgres, real against a managed one where each carries
+                # network latency.
+                #
+                # set_ is built from stmt.excluded, the values proposed by
+                # this insert, rather than from a captured dict: with many
+                # rows in flight there is no single dict to refer to, and
+                # excluded is per-row by definition. It also keeps the old
+                # behaviour that a restatement dropping a figure nulls the
+                # column instead of leaving the previous value behind.
+                stmt = pg_insert(Financials).values(rows)
+                updatable = [c for c in rows[0]
+                             if c not in ("company_id", "period_end")]
+                stmt = stmt.on_conflict_do_update(
+                    constraint="uq_company_period",
+                    set_={c: getattr(stmt.excluded, c) for c in updatable},
+                )
+                db.execute(stmt)
+            db.commit()
+        return len(rows)
     finally:
         db.close()
+
+
+def ingest_company(ticker: str, sector: str | None = None) -> int:
+    """Fetch EDGAR data for one company and upsert financials. Returns rows written.
+
+    A composition of fetch_financials and store_financials, kept so the CLI
+    and every existing caller still have one function that does the whole job.
+
+    The ticker is normalized here rather than at the caller. get_cik already
+    uppercases for its own lookup, so a lowercase argument resolved to the
+    right CIK and then wrote a lowercase companies row - and since the API
+    path uppercases before calling, the two disagreed only when this function
+    was used directly, as its own __main__ block does. A later request for the
+    uppercase ticker then missed that row, tried to insert its own, and turned
+    a difference in case into a unique-constraint 500.
+    """
+    ticker = ticker.upper()
+    _cik, name, series = fetch_financials(ticker)
+    return store_financials(ticker, name, series, sector=sector)
 
 
 if __name__ == "__main__":
