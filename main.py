@@ -11,7 +11,7 @@ from typing import Annotated
 import requests
 from anthropic import APIError
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
@@ -44,7 +44,14 @@ from schemas import (
     ReportOut,
 )
 from serialization import to_jsonable
-from views import render_landing, render_not_found, render_report
+from views import (
+    render_failure,
+    render_landing,
+    render_not_found,
+    render_report,
+    render_report_fragment,
+    render_report_shell,
+)
 
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
@@ -845,15 +852,158 @@ def _build_report(request: Request, response: Response, ticker: str,
     return payload
 
 
+def _sse(event: str, payload: dict) -> str:
+    """One server-sent event.
+
+    The data is JSON on a single line. SSE frames are line-delimited, so an
+    HTML fragment containing newlines cannot be written raw - JSON escapes
+    them, which is why fragments travel as a field rather than as the body.
+    """
+    return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+
+
+@app.get("/company/{ticker}/report/stream")
+def stream_report(request: Request, ticker: TickerPath, refresh: bool = False,
+                  token: str | None = None, db: Session = Depends(get_db)):
+    """Build a report, reporting each stage as it actually completes.
+
+    The page opens this as an EventSource. It emits `stage` as each step
+    lands, `partial` once the computed figures exist - around two seconds,
+    against the thirty the narrative takes - `done` with the finished sheet,
+    and `failed` with something a person can read.
+
+    `done` carries the rendered HTML rather than telling the page to reload.
+    A degraded report is deliberately not cached, so a reload would re-run the
+    entire pipeline, including the model call that just failed.
+    """
+    _enforce_rate_limit(request)
+    resolved_refresh = _refresh_requested(refresh, token)
+    normalized = ticker.upper()
+
+    def events():
+        # A plain Response collects the cache headers the build sets; they are
+        # not used on the stream itself, which must never be cached.
+        sink = Response()
+        try:
+            # No timing.track here. Starlette drives this generator through a
+            # thread pool and each resumption gets a fresh copy of the
+            # context, so a breakdown opened around the yields would never
+            # survive to the next step. The per-stage lines still log; the
+            # aggregate breakdown belongs to the JSON path, which runs
+            # straight through.
+            company = (
+                db.query(Company).filter(Company.ticker == normalized).first()
+            )
+            for event in _report_events(
+                sink, normalized, company, resolved_refresh, db
+            ):
+                if isinstance(event, pipeline.Stage):
+                    yield _sse("stage", event.as_dict())
+                elif isinstance(event, pipeline.Partial):
+                    yield _sse("partial", {
+                        "html": render_report_fragment(
+                            event.payload, pending=True
+                        ),
+                    })
+                elif isinstance(event, pipeline.Result):
+                    yield _sse("done", {
+                        "html": render_report_fragment(event.payload),
+                    })
+        except HTTPException as exc:
+            yield _sse("failed", {
+                "status": exc.status_code,
+                "html": render_failure(_failure_title(exc.status_code),
+                                       str(exc.detail)),
+            })
+        except Exception:
+            # Nothing may escape a streaming response: once the body has
+            # begun, an unhandled exception truncates it and the page waits
+            # forever on an event that will never arrive.
+            logger.exception("report stream failed for %s", normalized)
+            yield _sse("failed", {
+                "status": 500,
+                "html": render_failure(
+                    "Something went wrong",
+                    "The report could not be generated. This has been logged.",
+                ),
+            })
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-store",
+            # Tell nginx-style proxies not to buffer, which would hold every
+            # event until the response completed and defeat the entire point.
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _failure_title(status: int) -> str:
+    if status == 404:
+        return "Not found"
+    if status == 502:
+        return "Upstream unavailable"
+    if status == 429:
+        return "Too many requests"
+    if status == 403:
+        return "Not permitted"
+    return "Could not build this report"
+
+
 @app.get("/company/{ticker}/report/view", response_class=HTMLResponse)
 def get_report_view(request: Request, response: Response, ticker: TickerPath,
                     refresh: bool = False, token: str | None = None,
                     db: Session = Depends(get_db)):
-    """The same report, rendered as a readable tearsheet."""
-    report = get_report(request, response, ticker, refresh=refresh,
-                        token=token, db=db)
-    # A conditional request short-circuits to 304 before a payload exists;
-    # pass that straight through rather than trying to render it.
-    if isinstance(report, Response):
-        return report
-    return HTMLResponse(render_report(report), headers=dict(response.headers))
+    """The tearsheet: served whole when cached, built live when not.
+
+    A fresh cached report renders immediately, conditional requests and all -
+    that path is unchanged and costs nothing.
+
+    Otherwise the report has to be built, which takes about thirty seconds,
+    almost all of it the model writing. Rather than hold the connection open
+    with nothing on screen, this returns the shell at once and the page builds
+    itself from the stream.
+
+    The ticker is still resolved before the shell is returned. An unknown one
+    gets the same HTML 404 as before rather than a loading screen that fails a
+    moment later - get_cik is cached in-process, so this costs nothing after
+    the first request.
+    """
+    normalized = ticker.upper()
+    company = db.query(Company).filter(Company.ticker == normalized).first()
+    if company is not None and not refresh:
+        cached = (
+            db.query(Report).filter(Report.company_id == company.id).first()
+        )
+        if cached is not None:
+            age = datetime.now(UTC) - _as_utc(cached.generated_at)
+            if age < REPORT_MAX_AGE:
+                report = get_report(request, response, ticker, refresh=refresh,
+                                    token=token, db=db)
+                # A conditional request short-circuits to 304 before a payload
+                # exists; pass that straight through rather than rendering it.
+                if isinstance(report, Response):
+                    return report
+                return HTMLResponse(render_report(report),
+                                    headers=dict(response.headers))
+
+    try:
+        get_cik(normalized)
+    except ValueError:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown ticker: {normalized}"
+        ) from None
+    except requests.RequestException as exc:
+        logger.warning("SEC unavailable during CIK lookup for %s: %s",
+                       normalized, exc)
+        raise HTTPException(
+            status_code=502,
+            detail="SEC EDGAR is unavailable right now; please try again shortly.",
+        ) from exc
+
+    return HTMLResponse(
+        render_report_shell(normalized),
+        headers={"Cache-Control": "no-store"},
+    )

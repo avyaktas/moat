@@ -168,3 +168,29 @@ def test_depth_survives_a_thread_boundary():
     by_name = dict(zip([n for n, _ in t.stages], t.depths, strict=True))
     assert by_name["inside_worker"] == 1
     assert by_name["prefetch"] == 0
+
+
+def test_reset_tolerates_a_context_that_moved():
+    """A `with` block spanning a yield can be entered and left in different
+    contexts - Starlette resumes a sync generator in a fresh copy each step.
+    ContextVar.reset raises for that, and timing must never break the thing it
+    measures."""
+    import contextvars
+
+    var = contextvars.ContextVar("probe", default=None)
+
+    def take_token():
+        return var.set("value")
+
+    token = contextvars.copy_context().run(take_token)
+    timing._reset(var, token)   # must not raise
+
+
+def test_a_generator_spanning_yields_does_not_explode():
+    """The exact shape that failed: track() around a generator's yields."""
+    def gen():
+        with timing.track("streamed"):
+            yield 1
+            yield 2
+
+    assert list(gen()) == [1, 2]

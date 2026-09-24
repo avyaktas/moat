@@ -84,6 +84,27 @@ class Timings:
         return f"total={total:.2f}s " + " ".join(parts)
 
 
+def _reset(var: contextvars.ContextVar, token) -> None:
+    """Restore a context variable, tolerating a context that moved.
+
+    A `with` block that spans a `yield` can be entered in one context and left
+    in another - Starlette drives a sync generator through a thread pool, and
+    every resumption gets a fresh copy of the caller's context, so the token
+    taken on entry belongs to a context that no longer exists on exit.
+    ContextVar.reset raises ValueError for that, which would turn a timing
+    detail into a failed request.
+
+    Timing must never be able to break the thing it measures, so a token that
+    no longer applies is dropped. The consequence is that the variable keeps
+    whatever the new context says, which is correct: that context was never
+    the one this block modified.
+    """
+    try:
+        var.reset(token)
+    except ValueError:
+        pass
+
+
 @contextmanager
 def track(label: str):
     """Open a per-request breakdown and log it on the way out."""
@@ -93,8 +114,8 @@ def track(label: str):
     try:
         yield timings
     finally:
-        _depth.reset(depth_token)
-        _current.reset(token)
+        _reset(_depth, depth_token)
+        _reset(_current, token)
         logger.info("timing %s | %s", label, timings.breakdown())
 
 
@@ -111,7 +132,7 @@ def stage(name: str):
     try:
         yield
     finally:
-        _depth.reset(token)
+        _reset(_depth, token)
         elapsed = time.perf_counter() - start
         timings = _current.get()
         if timings is not None:

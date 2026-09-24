@@ -58,7 +58,11 @@ def test_landing_page_served_at_root(client):
 
 
 def test_company_404_returns_html_page(client, monkeypatch):
+    # Both bindings: the view route resolves the ticker through main.get_cik
+    # before serving a loading shell, so an unknown one still 404s rather than
+    # showing a page that fails a moment later.
     monkeypatch.setattr("ingest.get_cik", _raise_unknown)
+    monkeypatch.setattr("main.get_cik", _raise_unknown)
     resp = client.get("/company/FAKE/report/view")
     assert resp.status_code == 404
     assert resp.headers["content-type"].startswith("text/html")
@@ -391,6 +395,7 @@ def test_json_brief_404_stays_json(client, monkeypatch):
 def test_view_route_404_is_html(client, monkeypatch):
     """The human-facing route keeps its on-brand page when the ticker misses."""
     monkeypatch.setattr("ingest.get_cik", _raise_unknown)
+    monkeypatch.setattr("main.get_cik", _raise_unknown)
     resp = client.get("/company/FAKE/report/view")
     assert resp.status_code == 404
     assert resp.headers["content-type"].startswith("text/html")
@@ -1310,3 +1315,207 @@ def test_truncation_has_its_own_message():
 
 def test_unknown_failure_still_says_something():
     assert _synthesis_failure_detail(RuntimeError("???"))
+
+
+# --- the streaming endpoint ---
+#
+# The page opens this as an EventSource and rebuilds itself as stages land.
+# Everything the reader sees during a cold build comes through here, so every
+# outcome - including every failure - has to arrive as an event.
+
+def _parse_sse(text: str) -> list[tuple[str, dict]]:
+    """Return [(event, data)] from a text/event-stream body."""
+    out = []
+    for block in text.strip().split("\n\n"):
+        if not block.strip():
+            continue
+        name, data = None, None
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                name = line[len("event: "):]
+            elif line.startswith("data: "):
+                data = json.loads(line[len("data: "):])
+        if name:
+            out.append((name, data))
+    return out
+
+
+def _stream(client, monkeypatch, ticker="MSFT", synth=None,
+            filing=_fake_risk_factors):
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", filing)
+    monkeypatch.setattr("main.time.sleep", lambda s: None)
+    monkeypatch.setattr(
+        "main.synthesize",
+        synth or (lambda *a, **k: {"verdict": "WATCH-CASE", "risks": [],
+                                   "grounding_rate": 1.0}),
+    )
+    resp = client.get(f"/company/{ticker}/report/stream")
+    return resp, _parse_sse(resp.text)
+
+
+def test_stream_is_an_event_stream(client, monkeypatch):
+    resp, _ = _stream(client, monkeypatch)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+
+
+def test_stream_is_never_cached(client, monkeypatch):
+    """Caching a progress stream would replay a stale build."""
+    resp, _ = _stream(client, monkeypatch)
+    assert resp.headers["cache-control"] == "no-store"
+
+
+def test_stream_disables_proxy_buffering(client, monkeypatch):
+    """A buffering proxy holds every event until the end, defeating the point."""
+    resp, _ = _stream(client, monkeypatch)
+    assert resp.headers["x-accel-buffering"] == "no"
+
+
+def test_stream_reports_stages_then_partial_then_done(client, monkeypatch):
+    _, events = _stream(client, monkeypatch)
+    names = [name for name, _ in events]
+    assert "stage" in names
+    assert names.index("partial") < names.index("done")
+    assert names[-1] == "done"
+
+
+def test_partial_arrives_before_the_narrative_exists(client, monkeypatch):
+    """The reason this endpoint exists: real figures long before the verdict."""
+    _, events = _stream(client, monkeypatch)
+    partial = next(d for n, d in events if n == "partial")
+    assert "$100" in partial["html"] or "Scorecard" in partial["html"]
+    assert "Writing analysis" in partial["html"]
+    assert "WATCH-CASE" not in partial["html"]
+
+
+def test_done_carries_the_finished_sheet(client, monkeypatch):
+    _, events = _stream(client, monkeypatch)
+    done = next(d for n, d in events if n == "done")
+    assert "WATCH-CASE" in done["html"]
+    assert "Writing analysis" not in done["html"]
+
+
+def test_done_carries_html_not_a_reload_instruction(client, monkeypatch):
+    """A degraded report is not cached, so a reload would rebuild everything."""
+    _, events = _stream(client, monkeypatch)
+    done = next(d for n, d in events if n == "done")
+    assert done["html"].lstrip().startswith("<div")
+
+
+def test_stage_events_carry_state_and_timing(client, monkeypatch):
+    _, events = _stream(client, monkeypatch)
+    stages = [d for n, d in events if n == "stage"]
+    assert {"key", "label", "state"} <= set(stages[0])
+    assert any(s.get("seconds") is not None for s in stages)
+
+
+def test_every_stage_reaches_a_terminal_state(client, monkeypatch):
+    """A stage left 'running' is a spinner that never stops."""
+    _, events = _stream(client, monkeypatch)
+    final = {}
+    for name, data in events:
+        if name == "stage":
+            final[data["key"]] = data["state"]
+    assert set(final) == {"fetch", "store", "metrics", "synthesis"}
+    assert all(state != "running" for state in final.values()), final
+
+
+def test_unknown_ticker_streams_a_failure(client, monkeypatch):
+    monkeypatch.setattr("main.fetch_financials", _raise_unknown)
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "X"))
+
+    resp = client.get("/company/NEWCO/report/stream")
+    events = _parse_sse(resp.text)
+    assert events[-1][0] == "failed"
+    assert events[-1][1]["status"] == 404
+    assert "Not found" in events[-1][1]["html"]
+
+
+def test_sec_outage_streams_a_failure(client, monkeypatch):
+    monkeypatch.setattr("main.fetch_financials", _sec_down)
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "X"))
+
+    events = _parse_sse(client.get("/company/NEWCO/report/stream").text)
+    assert events[-1][0] == "failed"
+    assert events[-1][1]["status"] == 502
+    assert "EDGAR" in events[-1][1]["html"]
+
+
+def test_synthesis_failure_still_delivers_the_figures(client, monkeypatch):
+    """A failed narrative must not cost the reader the computed data."""
+    def _boom(*a, **k):
+        raise _api_status_error(400)
+
+    _, events = _stream(client, monkeypatch, synth=_boom)
+    names = [n for n, _ in events]
+    assert "partial" in names
+    assert names[-1] == "done"
+    synth = [d for n, d in events if n == "stage" and d["key"] == "synthesis"]
+    assert synth[-1]["state"] == "failed"
+    assert "usage limit" in synth[-1]["detail"]
+
+
+def test_an_unexpected_error_still_ends_the_stream(client, monkeypatch):
+    """Nothing may escape a streaming response: the page would wait forever."""
+    def _explode(*a, **k):
+        raise RuntimeError("something nobody predicted")
+
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.build_report_data", _explode)
+
+    events = _parse_sse(client.get("/company/MSFT/report/stream").text)
+    assert events[-1][0] == "failed"
+    assert events[-1][1]["status"] == 500
+
+
+def test_stream_is_rate_limited(client, monkeypatch):
+    monkeypatch.setattr(app_settings, "rate_limit_burst", 1)
+    monkeypatch.setattr(app_settings, "rate_limit_per_minute", 0.0)
+    ratelimit.clear()
+    _stream(client, monkeypatch)
+    assert client.get("/company/MSFT/report/stream").status_code == 429
+
+
+# --- the view route now serves a shell on a cold build ---
+
+def test_view_route_serves_the_shell_when_uncached(client, monkeypatch):
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    resp = client.get("/company/MSFT/report/view")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "EventSource" in resp.text
+    assert 'data-stage="fetch"' in resp.text
+
+
+def test_the_shell_is_not_cached(client, monkeypatch):
+    """It represents work in progress, not a result."""
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    resp = client.get("/company/MSFT/report/view")
+    assert resp.headers["cache-control"] == "no-store"
+
+
+def test_the_shell_arrives_without_touching_the_model(client, monkeypatch):
+    """The whole point: the first response does not wait for synthesis."""
+    called = []
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.synthesize", lambda *a, **k: called.append(1))
+    client.get("/company/MSFT/report/view")
+    assert called == []
+
+
+def test_cached_report_skips_the_shell_entirely(client, monkeypatch):
+    """A report already built should render at once, not stream again."""
+    _cacheable_report(client, monkeypatch)
+    resp = client.get("/company/MSFT/report/view")
+    assert resp.status_code == 200
+    assert "EventSource" not in resp.text
+    assert "WATCH-CASE" in resp.text
