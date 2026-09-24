@@ -27,6 +27,8 @@ from ingest import get_cik, ingest_company
 from logging_config import configure_logging
 from metrics import debt_to_equity, fcf_margin, net_margin, roe, roic, ttm
 from models import Brief, Company, Financials, Report
+from prices import get_price
+from report import SynthesisError, build_report_data, synthesize
 from schemas import (
     BriefOut,
     CompanyOut,
@@ -34,8 +36,6 @@ from schemas import (
     MetricsOut,
     ReportOut,
 )
-from prices import get_price
-from report import SynthesisError, build_report_data, synthesize
 from serialization import to_jsonable
 from views import render_landing, render_not_found, render_report
 
