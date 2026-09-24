@@ -1,42 +1,35 @@
 # owns endpoints
 
-from typing import Annotated
-
-from fastapi import FastAPI, Depends, HTTPException, Path, Query, Request
-from fastapi import Response
-from fastapi.responses import HTMLResponse, JSONResponse
-from starlette.exceptions import HTTPException as StarletteHTTPException
-from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
-from models import Company, Financials, Brief, Report
-from database import get_db
-from metrics import debt_to_equity, fcf_margin, net_margin, roe, ttm, roic
-from ingest import ingest_company
-from prices import get_price
-from report import SynthesisError, build_report_data, synthesize
-from datetime import datetime, timedelta, timezone
-from views import render_report, render_landing, render_not_found
-import secrets
-import time
-import requests
-from anthropic import APIError
-
-import ratelimit
-from config import settings
-
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 import hashlib
 import json
 import logging
+import secrets
+import time
+from datetime import UTC, datetime, timedelta
+from typing import Annotated
 
+import requests
+from anthropic import APIError
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse
+from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+import ratelimit
 from analysis import answer_question
+from config import settings
+from database import get_db
 from filings import find_latest_10k, get_risk_factors
-
-from ingest import get_cik
-
+from ingest import get_cik, ingest_company
+from metrics import debt_to_equity, fcf_margin, net_margin, roe, roic, ttm
+from models import Brief, Company, Financials, Report
+from prices import get_price
+from report import SynthesisError, build_report_data, synthesize
 from serialization import to_jsonable
-
+from views import render_landing, render_not_found, render_report
 
 logger = logging.getLogger(__name__)
 
@@ -130,8 +123,12 @@ def get_or_ingest_company(ticker: str, db: Session) -> Company:
         ingest_company(ticker)
     except ValueError:
         # The SEC's ticker file does not list it. That is a real 404: no
-        # amount of retrying will produce this company.
-        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+        # amount of retrying will produce this company. `from None` because
+        # this is expected control flow, not an error worth chaining a
+        # traceback onto.
+        raise HTTPException(
+            status_code=404, detail=f"Unknown ticker: {ticker}"
+        ) from None
     except requests.RequestException as exc:
         # The SEC was unreachable, slow, or throttling - it rate-limits at
         # 10 req/s, so a 429 is an ordinary event rather than an exception.
@@ -471,8 +468,8 @@ def _as_utc(value: datetime) -> datetime:
     A naive value is assumed to be UTC, which is what the column stores.
     """
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _report_etag(ticker: str, generated_at: datetime) -> str:
@@ -513,7 +510,7 @@ def get_report(request: Request, response: Response, ticker: TickerPath,
     )
     if cached is not None and not refresh:
         generated_at = _as_utc(cached.generated_at)
-        age = datetime.now(timezone.utc) - generated_at
+        age = datetime.now(UTC) - generated_at
         if age < REPORT_MAX_AGE:
             etag = _report_etag(company.ticker, generated_at)
 
@@ -589,7 +586,7 @@ def get_report(request: Request, response: Response, ticker: TickerPath,
     # NO VERDICT payload for the full 7-day TTL (this happened to IBM on 7/29).
     # Return the degraded payload so the caller still sees the computed data,
     # but skip the write so the next request retries the narrative.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if narrative is not None:
         payload_json = json.dumps(payload, default=to_jsonable)
         stmt = pg_insert(Report).values(

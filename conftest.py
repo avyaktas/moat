@@ -125,8 +125,9 @@ def _no_network(monkeypatch):
             "fetch_company_facts or get_cik."
         )
 
-    import prices
     import requests.sessions
+
+    import prices
 
     monkeypatch.setattr(requests.sessions.Session, "request", _blocked)
     # yfinance talks through curl_cffi, not requests, so blocking the requests

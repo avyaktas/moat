@@ -33,10 +33,11 @@ from the SEC and writes it into the database.
     
 """
 
-import requests
-from sqlalchemy.orm import Session
 from datetime import date
+
+import requests
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.orm import Session
 
 from database import SessionLocal
 from models import Company, Financials

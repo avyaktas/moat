@@ -224,7 +224,7 @@ if __name__ == "__main__":
     print(f"Addressed: {result['addressed']}")
     print(f"Answer: {result['answer']}\n")
  
-    for quote, ok in zip(result["quotes"], result["quote_checks"]):
+    for quote, ok in zip(result["quotes"], result["quote_checks"], strict=True):
         mark = "OK  " if ok else "FAKE"
         print(f"  [{mark}] {quote[:120]}")
  

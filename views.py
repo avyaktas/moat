@@ -17,7 +17,6 @@ FORMATTING IS THE POINT
 
 import html
 
-
 # ---------------------------------------------------------------- shared shell
 #
 # One source of truth for the look. The tearsheet, the landing page, and the

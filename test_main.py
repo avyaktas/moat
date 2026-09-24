@@ -1,8 +1,8 @@
 import json
-import filings
+
 import analysis
-from models import Brief, Company, Report
 from conftest import TestingSessionLocal
+from models import Company, Report
 
 
 def test_health(client):
@@ -368,8 +368,8 @@ def test_json_brief_404_stays_json(client, monkeypatch):
     assert resp.headers["content-type"].startswith("application/json")
 
 
-def test_view_route_still_returns_html(client, monkeypatch):
-    """The human-facing route keeps its on-brand page."""
+def test_view_route_404_is_html(client, monkeypatch):
+    """The human-facing route keeps its on-brand page when the ticker misses."""
     monkeypatch.setattr("ingest.get_cik", _raise_unknown)
     resp = client.get("/company/FAKE/report/view")
     assert resp.status_code == 404

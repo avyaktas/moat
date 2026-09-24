@@ -17,7 +17,7 @@ from datetime import date
 from decimal import Decimal
 
 from main import to_jsonable
-from views import money, pct, mult, num, render_report
+from views import money, mult, num, pct, render_report
 
 EM_DASH = "—"
 FORMATTERS = (money, pct, mult, num)

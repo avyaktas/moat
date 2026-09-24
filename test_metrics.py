@@ -1,5 +1,6 @@
 from metrics import net_margin
 
+
 def test_net_margin_basic():
     assert net_margin(100.0, 20.0) == 0.20
 
@@ -15,7 +16,8 @@ def test_net_margin_zero_revenue():
 def test_net_margin_negative_income():
     assert net_margin(100.0, -20.0) == -0.20
 
-from metrics import debt_to_equity, fcf_margin, net_margin, roe
+from metrics import debt_to_equity, fcf_margin, roe
+
 
 def test_fcf_margin_basic():        assert fcf_margin(100.0, 25.0) == 0.25
 def test_fcf_margin_none_fcf():     assert fcf_margin(100.0, None) is None

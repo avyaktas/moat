@@ -1,6 +1,8 @@
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from datetime import date, datetime
-from sqlalchemy import ForeignKey, Numeric, UniqueConstraint, DateTime, Text, func
+
+from sqlalchemy import DateTime, ForeignKey, Numeric, Text, UniqueConstraint, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
 
 class Base(DeclarativeBase):
     pass
@@ -35,8 +37,6 @@ class Financials(Base):
 
     company = relationship("Company", back_populates="financials")
 
-from datetime import datetime
-from sqlalchemy import DateTime, Text, func
 
 
 class Brief(Base):

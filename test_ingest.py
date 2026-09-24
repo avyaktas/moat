@@ -45,7 +45,7 @@ def test_extract_quarterly_only_sees_framed_quarter():
 
 
 def test_extract_ytd_returns_the_running_totals():
-    ytd = dict((end, val) for _, end, val in extract_ytd(_facts(CUMULATIVE), ["OCF"]))
+    ytd = {end: val for _, end, val in extract_ytd(_facts(CUMULATIVE), ["OCF"])}
     assert ytd[date(2024, 3, 31)] == 100.0
     assert ytd[date(2024, 6, 30)] == 250.0
     assert ytd[date(2024, 9, 30)] == 420.0

@@ -18,7 +18,6 @@ from scoring import (
     valuation_ratios,
 )
 
-
 # --- ROIC ---
 
 def test_roic_passes_above_threshold():

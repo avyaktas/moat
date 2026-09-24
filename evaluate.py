@@ -143,7 +143,7 @@ def grade_one(q: dict, source: str, client) -> dict:
     # passages with an ellipsis, and a model that returned an empty string is
     # the whole diagnosis, and re-running until it goes green is not one.
     ungrounded = [
-        quote for quote, ok in zip(result["quotes"], result["quote_checks"])
+        quote for quote, ok in zip(result["quotes"], result["quote_checks"], strict=True)
         if not ok
     ]
 
@@ -225,7 +225,7 @@ def main():
 
     # hallucinations: questions that SHOULD abstain but didn't
     hallucinations = sum(
-        1 for r, q in zip(rows, QUESTIONS)
+        1 for r, q in zip(rows, QUESTIONS, strict=True)
         if q["should_abstain"] and not r["abstained"]
     )
 

@@ -26,9 +26,8 @@ THE VERDICT IS A FRAMEWORK CONCLUSION, NOT ADVICE
 
 import json
 
-from analysis import answer_question, check_quote
+from analysis import check_quote
 from llm import get_client
-from serialization import to_jsonable
 from metrics import (
     debt_to_equity,
     fcf_margin,
@@ -38,6 +37,8 @@ from metrics import (
     ttm,
 )
 from scoring import build_scorecard
+from serialization import to_jsonable
+
 
 def _f(v) -> float | None:
     """Decimal (from Numeric columns) to float, preserving None.
