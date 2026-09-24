@@ -30,8 +30,14 @@ WHICH NUMBERS ARE GATES AND WHICH ARE ADVISORY
     HARD GATES - ungrounded quotes, and the mean grounding rate. Whether a
     quote appears in the document is decided by string matching, not by the
     model, so these are facts about the output rather than judgments in it.
-    They never moved across any run taken while building this harness. They
-    exit non-zero when breached, which makes this usable in CI.
+
+    They are the most stable numbers here, but not perfectly stable: across
+    roughly eight runs one produced a single ungrounded quote, for a 98% rate.
+    The floor stays at 100% anyway. Relaxing it to 95% would buy green runs by
+    giving up the only thing being measured - a quote is in the document or it
+    is not, and there is no principled reason to accept a fabricated one. A
+    breach is a prompt to look at the quote, which is why failures now print
+    the offending text in full rather than only a count.
 
     ADVISORY - answer correctness and abstention accuracy. Answer correctness
     substring-matches key terms against free-text phrasing and scored 100%,
@@ -75,10 +81,11 @@ FIXTURE_META = FIXTURE_DIR / "msft_fy2025_item1a.json"
 MSFT_CIK = "789019"
 
 # A quote is either in the document or it is not, so the grounding gate is an
-# absolute rather than a target. It held at 100% across every run taken while
-# building this harness, including runs whose answer correctness moved by 20
-# points and one whose abstention framing flipped - which is exactly why it is
-# the gate and those are not.
+# absolute rather than a target. Deliberately not relaxed to 95% to absorb the
+# occasional mangled quote: a floor below 100% accepts fabrication by policy,
+# and this is the number the whole project exists to defend. When it breaches,
+# the offending quote is printed so the cause can be identified rather than
+# re-rolled.
 MIN_GROUNDING_RATE = 1.0
 
 # Three outcomes, three exit codes. Conflating "could not run" with "failed"
@@ -130,6 +137,16 @@ def grade_one(q: dict, source: str, client) -> dict:
 
     fake_quotes = sum(1 for ok in result["quote_checks"] if not ok)
 
+    # Keep the offending quotes, not just how many there were. A gate that
+    # reports "1 ungrounded quote" and nothing else cannot be acted on: the
+    # difference between a model that paraphrased, a model that joined two
+    # passages with an ellipsis, and a model that returned an empty string is
+    # the whole diagnosis, and re-running until it goes green is not one.
+    ungrounded = [
+        quote for quote, ok in zip(result["quotes"], result["quote_checks"])
+        if not ok
+    ]
+
     return {
         "id": q["id"],
         "category": q["category"],
@@ -138,6 +155,7 @@ def grade_one(q: dict, source: str, client) -> dict:
         "answer_correct": answer_correct,
         "grounding_rate": result["grounding_rate"],
         "fake_quotes": fake_quotes,
+        "ungrounded": ungrounded,
         "answer": result["answer"],
     }
 
@@ -234,6 +252,15 @@ def main():
     print(f"  Abstention accuracy:  {abstention_acc:.0%}  ({sum(r['abstention_correct'] for r in rows)}/{n})")
     if correctness is not None:
         print(f"  Answer correctness:   {correctness:.0%}  ({sum(r['answer_correct'] for r in answerable)}/{len(answerable)} answerable/specific)")
+
+    if total_fake:
+        print()
+        print("Ungrounded quotes in full - what the model produced that the")
+        print("document does not contain:")
+        for r in rows:
+            for quote in r.get("ungrounded", []):
+                shown = repr(quote) if len(quote) <= 300 else repr(quote[:300]) + "..."
+                print(f"  Q{r['id']} [{len(quote)} chars] {shown}")
 
     failures = []
     if total_fake:
