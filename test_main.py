@@ -324,3 +324,46 @@ def test_synthesis_succeeding_on_retry_is_cached(client, monkeypatch):
         assert db.query(Report).count() == 1
     finally:
         db.close()
+
+
+# --- 404 content type follows the route, not the path prefix ---
+#
+# The handler matched every path under /company/, so the JSON endpoints
+# answered 404 with an HTML page. An API client asking for JSON got markup.
+
+def test_json_report_404_stays_json(client, monkeypatch):
+    monkeypatch.setattr("ingest.get_cik", _raise_unknown)
+    resp = client.get("/company/FAKE/report")
+    assert resp.status_code == 404
+    assert resp.headers["content-type"].startswith("application/json")
+    assert resp.json()["detail"]
+
+
+def test_json_company_404_stays_json(client, monkeypatch):
+    monkeypatch.setattr("ingest.get_cik", _raise_unknown)
+    resp = client.get("/company/FAKE")
+    assert resp.status_code == 404
+    assert resp.headers["content-type"].startswith("application/json")
+
+
+def test_json_financials_404_stays_json(client, monkeypatch):
+    monkeypatch.setattr("ingest.get_cik", _raise_unknown)
+    resp = client.get("/company/FAKE/financials")
+    assert resp.status_code == 404
+    assert resp.headers["content-type"].startswith("application/json")
+
+
+def test_json_brief_404_stays_json(client, monkeypatch):
+    monkeypatch.setattr("ingest.get_cik", _raise_unknown)
+    resp = client.get("/company/FAKE/brief")
+    assert resp.status_code == 404
+    assert resp.headers["content-type"].startswith("application/json")
+
+
+def test_view_route_still_returns_html(client, monkeypatch):
+    """The human-facing route keeps its on-brand page."""
+    monkeypatch.setattr("ingest.get_cik", _raise_unknown)
+    resp = client.get("/company/FAKE/report/view")
+    assert resp.status_code == 404
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "Not found" in resp.text

@@ -52,13 +52,28 @@ def get_or_ingest_company(ticker: str, db: Session) -> Company:
     
 
 
+def _is_html_route(path: str) -> bool:
+    """True for the routes a person browses, as opposed to calls an API makes.
+
+    Kept as a predicate rather than inlined so the rule has one definition:
+    any future HTML route is added here, and the 404 follows automatically.
+    """
+    return path.rstrip("/").endswith("/view")
+
+
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    """A 404 under /company/* means a human mistyped a ticker or asked for a
-    company with no filing. Give them the on-brand page with a way back to
-    search, not raw JSON. Every other error keeps the default JSON shape so
-    the API stays an API."""
-    if exc.status_code == 404 and request.url.path.startswith("/company/"):
+    """Answer a 404 in the format the route itself speaks.
+
+    A human who mistyped a ticker into the search box should land on the
+    on-brand page with a way back, not raw JSON. But the branch that decided
+    this keyed on the /company/ path prefix, which every JSON endpoint also
+    shares - so GET /company/FAKE/report, an API call, came back as markup.
+
+    The view routes are the HTML ones. Everything else stays JSON, because an
+    API that changes content type on the error path is not an API.
+    """
+    if exc.status_code == 404 and _is_html_route(request.url.path):
         return HTMLResponse(render_not_found(exc.detail), status_code=404)
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
 
