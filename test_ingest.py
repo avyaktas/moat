@@ -155,3 +155,280 @@ def test_ingest_is_idempotent_across_case(client, monkeypatch):
         assert db.query(Company).count() == 1
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------- derive_q4
+#
+# Companies do not file a standalone Q4 10-Q; the fourth quarter lives inside
+# the annual 10-K figure. derive_q4 recovers it by subtraction - real
+# arithmetic on filed numbers, not an estimate. It was untested, and it is the
+# most consequential untested code in the repo: a bug here is a wrong revenue
+# figure on a published tearsheet, arrived at silently.
+
+from ingest import derive_q4, extract_annual
+
+
+def test_q4_is_the_year_minus_three_quarters():
+    quarterly = {
+        date(2024, 3, 31): 100.0,
+        date(2024, 6, 30): 150.0,
+        date(2024, 9, 30): 170.0,
+    }
+    annual = {date(2024, 12, 31): (date(2024, 1, 1), 600.0)}
+    out = derive_q4(quarterly, annual)
+    assert out[date(2024, 12, 31)] == 180.0      # 600 - (100 + 150 + 170)
+
+
+def test_q4_not_derived_from_two_quarters():
+    """Three quarters exactly, or nothing. Two would silently overstate Q4."""
+    quarterly = {date(2024, 3, 31): 100.0, date(2024, 6, 30): 150.0}
+    annual = {date(2024, 12, 31): (date(2024, 1, 1), 600.0)}
+    assert date(2024, 12, 31) not in derive_q4(quarterly, annual)
+
+
+def test_q4_not_derived_from_four_quarters():
+    """Four quarters inside the year means one is already Q4 or the data is
+    wrong; subtracting would produce a fifth quarter from nowhere."""
+    quarterly = {
+        date(2024, 3, 31): 100.0, date(2024, 6, 30): 150.0,
+        date(2024, 9, 30): 170.0, date(2024, 11, 30): 50.0,
+    }
+    annual = {date(2025, 1, 31): (date(2024, 1, 1), 600.0)}
+    assert date(2025, 1, 31) not in derive_q4(quarterly, annual)
+
+
+def test_existing_q4_is_never_overwritten():
+    """A filed Q4 is a fact; a derived one is arithmetic. Facts win."""
+    quarterly = {
+        date(2024, 3, 31): 100.0, date(2024, 6, 30): 150.0,
+        date(2024, 9, 30): 170.0, date(2024, 12, 31): 999.0,
+    }
+    annual = {date(2024, 12, 31): (date(2024, 1, 1), 600.0)}
+    assert derive_q4(quarterly, annual)[date(2024, 12, 31)] == 999.0
+
+
+def test_q4_ignores_quarters_outside_the_fiscal_year():
+    """Only quarters inside [fy_start, fy_end] count toward the subtraction."""
+    quarterly = {
+        date(2023, 12, 31): 500.0,                # prior year, must be ignored
+        date(2024, 3, 31): 100.0,
+        date(2024, 6, 30): 150.0,
+        date(2024, 9, 30): 170.0,
+    }
+    annual = {date(2024, 12, 31): (date(2024, 1, 1), 600.0)}
+    assert derive_q4(quarterly, annual)[date(2024, 12, 31)] == 180.0
+
+
+def test_q4_handles_an_off_calendar_fiscal_year():
+    """Microsoft's fiscal year ends 30 June."""
+    quarterly = {
+        date(2024, 9, 30): 100.0,
+        date(2024, 12, 31): 150.0,
+        date(2025, 3, 31): 170.0,
+    }
+    annual = {date(2025, 6, 30): (date(2024, 7, 1), 600.0)}
+    assert derive_q4(quarterly, annual)[date(2025, 6, 30)] == 180.0
+
+
+def test_q4_can_be_negative():
+    """A loss-making fourth quarter is a real outcome, not a bad derivation."""
+    quarterly = {
+        date(2024, 3, 31): 100.0, date(2024, 6, 30): 100.0,
+        date(2024, 9, 30): 100.0,
+    }
+    annual = {date(2024, 12, 31): (date(2024, 1, 1), 250.0)}
+    assert derive_q4(quarterly, annual)[date(2024, 12, 31)] == -50.0
+
+
+def test_q4_with_no_annual_data_derives_nothing():
+    quarterly = {date(2024, 3, 31): 100.0}
+    assert derive_q4(quarterly, {}) == quarterly
+
+
+# ---------------------------------------------------------------- extract_annual
+
+def test_extract_annual_takes_only_10k_entries():
+    facts = _facts([
+        _entry("2024-01-01", "2024-12-31", 600.0, form="10-K"),
+        _entry("2023-01-01", "2023-12-31", 500.0, form="10-Q"),
+    ])
+    out = extract_annual(facts, ["OCF"])
+    assert date(2024, 12, 31) in out
+    assert date(2023, 12, 31) not in out
+
+
+def test_extract_annual_tolerates_52_and_53_week_years():
+    """Retailers run 52/53-week fiscal calendars; 364 and 371 days are years."""
+    facts = _facts([
+        _entry("2024-01-01", "2024-12-29", 600.0, form="10-K"),   # 363 days
+        _entry("2022-01-02", "2023-01-07", 500.0, form="10-K"),   # 370 days
+    ])
+    out = extract_annual(facts, ["OCF"])
+    assert len(out) == 2
+
+
+def test_extract_annual_rejects_a_half_year():
+    facts = _facts([_entry("2024-01-01", "2024-06-30", 300.0, form="10-K")])
+    assert extract_annual(facts, ["OCF"]) == {}
+
+
+def test_extract_annual_returns_the_start_date():
+    """derive_q4 needs the start to know which quarters fall inside the year."""
+    facts = _facts([_entry("2024-01-01", "2024-12-31", 600.0, form="10-K")])
+    start, value = extract_annual(facts, ["OCF"])[date(2024, 12, 31)]
+    assert start == date(2024, 1, 1)
+    assert value == 600.0
+
+
+# ---------------------------------------------------------------- the load loop
+
+def test_ingest_writes_rows_and_derives_fcf(client, monkeypatch):
+    """free_cash_flow = operating cash flow - capex, and only when both exist."""
+    from models import Financials
+
+    facts = {"facts": {"us-gaap": {
+        "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": [
+            _entry("2024-01-01", "2024-03-31", 300.0, frame="CY2024Q1"),
+        ]}},
+        "PaymentsToAcquirePropertyPlantAndEquipment": {"units": {"USD": [
+            _entry("2024-01-01", "2024-03-31", 100.0, frame="CY2024Q1"),
+        ]}},
+        "NetIncomeLoss": {"units": {"USD": [
+            _entry("2024-01-01", "2024-03-31", 50.0, frame="CY2024Q1"),
+        ]}},
+    }}}
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr(ingest_module, "fetch_company_facts", lambda cik: facts)
+
+    written = ingest_module.ingest_company("MSFT")
+    assert written == 1
+
+    db = TestingSessionLocal()
+    try:
+        row = db.query(Financials).one()
+        assert row.period_end == date(2024, 3, 31)
+        assert float(row.free_cash_flow) == 200.0     # 300 - 100
+        assert float(row.net_income) == 50.0
+        assert row.revenue is None                    # absent stays absent
+    finally:
+        db.close()
+
+
+def test_ingest_leaves_fcf_null_when_capex_is_missing(client, monkeypatch):
+    """Unknown is not zero: OCF alone must not be reported as free cash flow."""
+    from models import Financials
+
+    facts = {"facts": {"us-gaap": {
+        "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": [
+            _entry("2024-01-01", "2024-03-31", 300.0, frame="CY2024Q1"),
+        ]}},
+    }}}
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr(ingest_module, "fetch_company_facts", lambda cik: facts)
+    ingest_module.ingest_company("MSFT")
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(Financials).one().free_cash_flow is None
+    finally:
+        db.close()
+
+
+def test_ingest_sums_current_and_noncurrent_debt(client, monkeypatch):
+    from models import Financials
+
+    facts = {"facts": {"us-gaap": {
+        "LongTermDebtCurrent": {"units": {"USD": [
+            _entry("2024-01-01", "2024-03-31", 10.0, frame="CY2024Q1I"),
+        ]}},
+        "LongTermDebtNoncurrent": {"units": {"USD": [
+            _entry("2024-01-01", "2024-03-31", 90.0, frame="CY2024Q1I"),
+        ]}},
+    }}}
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr(ingest_module, "fetch_company_facts", lambda cik: facts)
+    ingest_module.ingest_company("MSFT")
+
+    db = TestingSessionLocal()
+    try:
+        assert float(db.query(Financials).one().total_debt) == 100.0
+    finally:
+        db.close()
+
+
+def test_ingest_total_debt_null_when_neither_component_exists(client, monkeypatch):
+    from models import Financials
+
+    facts = {"facts": {"us-gaap": {
+        "NetIncomeLoss": {"units": {"USD": [
+            _entry("2024-01-01", "2024-03-31", 50.0, frame="CY2024Q1"),
+        ]}},
+    }}}
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr(ingest_module, "fetch_company_facts", lambda cik: facts)
+    ingest_module.ingest_company("MSFT")
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(Financials).one().total_debt is None
+    finally:
+        db.close()
+
+
+def test_ingest_is_idempotent_on_rerun(client, monkeypatch):
+    """The docstring promises reruns write no new rows."""
+    from models import Financials
+
+    facts = {"facts": {"us-gaap": {
+        "NetIncomeLoss": {"units": {"USD": [
+            _entry("2024-01-01", "2024-03-31", 50.0, frame="CY2024Q1"),
+        ]}},
+    }}}
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr(ingest_module, "fetch_company_facts", lambda cik: facts)
+
+    ingest_module.ingest_company("MSFT")
+    ingest_module.ingest_company("MSFT")
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(Financials).count() == 1
+    finally:
+        db.close()
+
+
+def test_ingest_rerun_updates_a_restated_figure(client, monkeypatch):
+    """Companies restate. An upsert must carry the new value through."""
+    from models import Financials
+
+    def _facts_with(value):
+        return {"facts": {"us-gaap": {
+            "NetIncomeLoss": {"units": {"USD": [
+                _entry("2024-01-01", "2024-03-31", value, frame="CY2024Q1"),
+            ]}},
+        }}}
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", "Microsoft"))
+
+    monkeypatch.setattr(ingest_module, "fetch_company_facts", lambda cik: _facts_with(50.0))
+    ingest_module.ingest_company("MSFT")
+    monkeypatch.setattr(ingest_module, "fetch_company_facts", lambda cik: _facts_with(75.0))
+    ingest_module.ingest_company("MSFT")
+
+    db = TestingSessionLocal()
+    try:
+        row = db.query(Financials).one()
+        assert float(row.net_income) == 75.0
+    finally:
+        db.close()

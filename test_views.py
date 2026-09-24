@@ -250,3 +250,57 @@ def test_footer_does_not_mislabel_a_local_timestamp_as_utc():
     assert "2026-09-24 14:44:35 UTC" not in html, (
         "a local-time value was rendered with a UTC label"
     )
+
+
+# --- the landing page and the 404 page ---
+#
+# Both are user-facing HTML that nothing rendered in a test. A crash in either
+# is a blank page at the front door.
+
+from views import render_landing, render_not_found
+
+
+def test_landing_page_is_a_complete_document():
+    html = render_landing()
+    assert html.strip().startswith("<!DOCTYPE html>")
+    assert html.rstrip().endswith("</html>")
+    assert "<title>" in html
+
+
+def test_landing_page_offers_a_way_in():
+    html = render_landing()
+    assert "/report/view" in html
+    assert "<form" in html
+
+
+def test_landing_page_carries_the_disclaimer():
+    """The claim that this is not investment advice is not optional."""
+    assert "not investment advice" in render_landing()
+
+
+def test_not_found_page_is_a_complete_document():
+    html = render_not_found("Unknown ticker: ZZZZ")
+    assert html.strip().startswith("<!DOCTYPE html>")
+    assert html.rstrip().endswith("</html>")
+
+
+def test_not_found_page_shows_the_detail_and_a_way_back():
+    html = render_not_found("Unknown ticker: ZZZZ")
+    assert "Unknown ticker: ZZZZ" in html
+    assert 'href="/"' in html
+
+
+def test_not_found_page_escapes_the_detail():
+    """The detail contains a user-supplied ticker and is interpolated into
+    HTML. Unescaped, that is reflected XSS on the 404 page."""
+    html = render_not_found('<script>alert("xss")</script>')
+    assert "<script>alert" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_report_escapes_a_hostile_company_name():
+    r = _report_with_health({"survivability": {"verdict": ""}})
+    r["name"] = '<img src=x onerror="alert(1)">'
+    html = render_report(r)
+    assert "<img src=x" not in html
+    assert "&lt;img" in html
