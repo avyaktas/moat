@@ -272,40 +272,41 @@ def ingest_company(ticker: str, sector: str | None = None) -> int:
             db.add(company)
             db.flush()
 
-        processed = 0
-        for period in sorted(all_periods):
-            ocf = series["operating_cash_flow"].get(period)
-            capex = series["capex"].get(period)
-            fcf = (ocf - capex) if (ocf is not None and capex is not None) else None
-
-            dc = series["debt_current"].get(period)
-            dnc = series["debt_noncurrent"].get(period)
-            if dc is not None or dnc is not None:
-                total_debt = (dc or 0) + (dnc or 0)
-            else:
-                total_debt = None
-
-            values = {
-                "company_id": company.id,
-                "period_end": period,
-                "revenue": series["revenue"].get(period),
-                "net_income": series["net_income"].get(period),
-                "free_cash_flow": fcf,
-                "total_debt": total_debt,
-                "shareholders_equity": series["equity"].get(period),
-                "cash": series["cash"].get(period),
-                "short_term_investments": series["short_term_investments"].get(period),
-            }
-
-            stmt = pg_insert(Financials).values(**values)
-            stmt = stmt.on_conflict_do_update(
-                constraint="uq_company_period",
-                set_={k: v for k, v in values.items() if k not in ("company_id", "period_end")},
-            )
-            db.execute(stmt)
-            processed += 1
-
         with timing.stage("db.financials_write"):
+            processed = 0
+            for period in sorted(all_periods):
+                ocf = series["operating_cash_flow"].get(period)
+                capex = series["capex"].get(period)
+                fcf = (ocf - capex) if (ocf is not None and capex is not None) else None
+
+                dc = series["debt_current"].get(period)
+                dnc = series["debt_noncurrent"].get(period)
+                if dc is not None or dnc is not None:
+                    total_debt = (dc or 0) + (dnc or 0)
+                else:
+                    total_debt = None
+
+                values = {
+                    "company_id": company.id,
+                    "period_end": period,
+                    "revenue": series["revenue"].get(period),
+                    "net_income": series["net_income"].get(period),
+                    "free_cash_flow": fcf,
+                    "total_debt": total_debt,
+                    "shareholders_equity": series["equity"].get(period),
+                    "cash": series["cash"].get(period),
+                    "short_term_investments": series["short_term_investments"].get(period),
+                }
+
+                stmt = pg_insert(Financials).values(**values)
+                stmt = stmt.on_conflict_do_update(
+                    constraint="uq_company_period",
+                    set_={k: v for k, v in values.items()
+                          if k not in ("company_id", "period_end")},
+                )
+                db.execute(stmt)
+                processed += 1
+
             db.commit()
         return processed
     finally:
