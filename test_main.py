@@ -200,3 +200,127 @@ def test_report_not_cached_when_synthesis_returns_bad_json(client, monkeypatch):
         assert db.query(Report).count() == 0
     finally:
         db.close()
+
+
+def _connection_error():
+    import anthropic
+    import httpx
+
+    return anthropic.APIConnectionError(
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    )
+
+
+def test_report_survives_anthropic_connection_error(client, monkeypatch):
+    """APIConnectionError is NOT an APIStatusError subclass.
+
+    Its MRO is APIConnectionError -> APIError -> AnthropicError, so the
+    original `except APIStatusError` never caught it and a transient network
+    blip to Anthropic 500'd the whole report instead of degrading it.
+    """
+    def _raise_conn(*a, **k):
+        raise _connection_error()
+
+    monkeypatch.setattr("main.get_cik", lambda ticker: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda ticker: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", _raise_conn)
+    monkeypatch.setattr("main.time.sleep", lambda s: None)
+
+    resp = client.get("/company/MSFT/report")
+    assert resp.status_code == 200
+    assert resp.json()["narrative"] is None
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(Report).count() == 0
+    finally:
+        db.close()
+
+
+def test_report_survives_anthropic_timeout(client, monkeypatch):
+    """APITimeoutError is also outside APIStatusError."""
+    import anthropic
+    import httpx
+
+    def _raise_timeout(*a, **k):
+        raise anthropic.APITimeoutError(
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        )
+
+    monkeypatch.setattr("main.get_cik", lambda ticker: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda ticker: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", _raise_timeout)
+    monkeypatch.setattr("main.time.sleep", lambda s: None)
+
+    resp = client.get("/company/MSFT/report")
+    assert resp.status_code == 200
+    assert resp.json()["narrative"] is None
+
+
+def test_synthesis_is_retried_once_then_degrades(client, monkeypatch):
+    """One try plus one retry - not zero retries, and not an infinite loop."""
+    calls = []
+
+    def _always_fail(*a, **k):
+        calls.append(1)
+        raise _connection_error()
+
+    monkeypatch.setattr("main.get_cik", lambda ticker: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda ticker: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", _always_fail)
+    monkeypatch.setattr("main.time.sleep", lambda s: None)
+
+    client.get("/company/MSFT/report")
+    assert len(calls) == 2
+
+
+def test_no_sleep_after_the_final_attempt(client, monkeypatch):
+    """Sleeping after the last failure delays the response for nothing."""
+    sleeps = []
+
+    def _always_fail(*a, **k):
+        raise _connection_error()
+
+    monkeypatch.setattr("main.get_cik", lambda ticker: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda ticker: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", _always_fail)
+    monkeypatch.setattr("main.time.sleep", lambda s: sleeps.append(s))
+
+    client.get("/company/MSFT/report")
+    assert len(sleeps) == 1, f"expected one sleep between two attempts, got {sleeps}"
+
+
+def test_synthesis_succeeding_on_retry_is_cached(client, monkeypatch):
+    """A retry that succeeds produces a real, cacheable report."""
+    attempts = []
+
+    def _fail_then_succeed(*a, **k):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise _connection_error()
+        return {"verdict": "WATCH-CASE", "risks": [], "grounding_rate": 1.0}
+
+    monkeypatch.setattr("main.get_cik", lambda ticker: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda ticker: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", _fail_then_succeed)
+    monkeypatch.setattr("main.time.sleep", lambda s: None)
+
+    resp = client.get("/company/MSFT/report")
+    assert resp.status_code == 200
+    assert resp.json()["narrative"]["verdict"] == "WATCH-CASE"
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(Report).count() == 1
+    finally:
+        db.close()

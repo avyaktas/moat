@@ -13,7 +13,7 @@ from report import SynthesisError, build_report_data, synthesize
 from datetime import datetime, timedelta, timezone
 from views import render_report, render_landing, render_not_found
 import time
-from anthropic import APIStatusError
+from anthropic import APIError
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 import json
@@ -204,8 +204,13 @@ def _brief_to_dict(b: Brief) -> dict:
     }
 
 
-REPORT_MAX_AGE = timedelta(days=7
-                           )
+REPORT_MAX_AGE = timedelta(days=7)
+
+# One try plus one retry. A second failure means the outage is not a blip,
+# and a caller waiting on a report would rather have the computed figures now
+# than a third attempt's latency.
+SYNTHESIS_ATTEMPTS = 2
+SYNTHESIS_BACKOFF_SECONDS = 3
 @app.get("/company/{ticker}/report")
 def get_report(ticker: str, refresh: bool = False, db: Session = Depends(get_db)):
     company = get_or_ingest_company(ticker, db)
@@ -242,14 +247,27 @@ def get_report(ticker: str, refresh: bool = False, db: Session = Depends(get_db)
     filing = get_risk_factors(cik)
     narrative = None
     if filing:
-        for attempt in range(2):          # one try + one retry
+        for attempt in range(SYNTHESIS_ATTEMPTS):
             try:
                 narrative = synthesize(data, filing["text"], company.name)
                 break
-            except (APIStatusError, SynthesisError):
-                if attempt == 0:
-                    time.sleep(3)         # brief pause, then retry once
-                # second failure: narrative stays None, report degrades
+            except (APIError, SynthesisError) as exc:
+                # APIError, not APIStatusError. APIConnectionError and
+                # APITimeoutError descend from APIError WITHOUT passing
+                # through APIStatusError, so catching the narrower class let
+                # an ordinary network blip 500 the whole report instead of
+                # degrading it to computed-figures-only.
+                last = attempt == SYNTHESIS_ATTEMPTS - 1
+                logger.warning(
+                    "synthesis attempt %d/%d failed for %s: %s: %s",
+                    attempt + 1, SYNTHESIS_ATTEMPTS, company.ticker,
+                    type(exc).__name__, exc,
+                )
+                if not last:
+                    # Back off before retrying; never sleep after the final
+                    # attempt, which would delay the response for nothing.
+                    time.sleep(SYNTHESIS_BACKOFF_SECONDS * (2 ** attempt))
+                # final failure: narrative stays None and the report degrades
 
     payload = {
         "company": company.ticker,
