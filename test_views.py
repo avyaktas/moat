@@ -495,3 +495,68 @@ def test_the_swap_anchor_is_unique_per_rendering():
     """Two elements with the same id would make the swap pick one at random."""
     html = render_report_fragment(_computed_only_report(), pending=True)
     assert html.count('id="sheet"') == 1
+
+
+# --- the design system ---
+#
+# Tokens, not literals. Every page pulls the same palette and spacing scale
+# from one place, so light and dark are a variable swap rather than a second
+# stylesheet, and a colour can only be wrong in one spot.
+
+from views import _TOKENS
+
+
+def test_both_themes_are_defined():
+    assert "prefers-color-scheme: dark" in _TOKENS
+    assert '[data-theme="dark"]' in _TOKENS
+    assert '[data-theme="light"]' in _TOKENS
+
+
+def test_the_palette_is_variables_not_literals():
+    for token in ("--bg", "--surface", "--border", "--text", "--text-muted",
+                  "--accent", "--pos", "--neg"):
+        assert f"{token}:" in _TOKENS, f"{token} missing"
+
+
+def test_there_is_a_spacing_scale():
+    for step in ("--s1", "--s2", "--s4", "--s6", "--s8"):
+        assert f"{step}:" in _TOKENS
+
+
+def test_numbers_use_tabular_figures():
+    """Otherwise digits change width as values update and columns jitter."""
+    assert "tabular-nums" in _TOKENS
+    assert "'tnum'" in _TOKENS
+
+
+def test_focus_is_visible():
+    """Keyboard users need to see where they are, in both themes."""
+    assert ":focus-visible" in _TOKENS
+    assert "outline:" in _TOKENS
+
+
+def test_reduced_motion_is_respected():
+    assert "prefers-reduced-motion: reduce" in _TOKENS
+
+
+def test_one_typeface_with_a_system_fallback():
+    from views import _FONTS
+
+    assert "Inter" in _FONTS
+    assert "display=swap" in _FONTS, "text must not be invisible while loading"
+    assert 'rel="preload"' in _FONTS
+    assert "-apple-system" in _TOKENS, "no system fallback for the webfont"
+
+
+def test_the_old_display_faces_are_gone():
+    """Three families was three loads and three chances to flash."""
+    from views import _FONTS
+
+    assert "Instrument+Serif" not in _FONTS
+    assert "JetBrains" not in _FONTS
+
+
+def test_every_page_carries_the_tokens():
+    assert "--accent" in render_landing()
+    assert "--accent" in render_not_found("x")
+    assert "--accent" in render_report_shell("NVDA")

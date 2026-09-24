@@ -26,35 +26,175 @@ import json
 
 _FONTS = """<link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">"""
+<link rel="preload" as="style"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">"""
 
-# Design tokens + base reset. Plain string (single braces): it is inserted into
-# the report's f-string and into _document() without needing brace-doubling.
+# Design tokens. A plain string (single braces): it is inserted into the
+# report's f-string and into _document() without needing brace-doubling.
+#
+# ONE TYPEFACE
+#
+#     The page used three - a display serif for the ticker, a sans for prose,
+#     a monospace for every number. Three families is three font loads, three
+#     rendering behaviours and three chances to flash. Inter does all of it:
+#     its tabular-figure feature gives numbers the fixed advance that made a
+#     monospace necessary, without the typewriter texture.
+#
+#     Loaded with preconnect, a preload hint and display=swap, over a system
+#     stack that is metrically close on every platform. Text is readable from
+#     the first paint and never invisible.
+#
+# COLOUR MEANS SOMETHING OR IT IS GREY
+#
+#     One accent, used for interaction. Green and red reserved for direction
+#     and for pass/fail - never decoration. Everything else is a neutral, so
+#     the eye goes to the number that moved rather than to the chrome.
+#
+#     Both themes are defined here as variables: the automatic one follows the
+#     system, and an explicit data-theme on the root overrides it in either
+#     direction.
 _TOKENS = """
   :root {
-    --ink:      #16232B;
-    --ink-soft: #4A5A63;
-    --paper:    #F7F5F0;
-    --rule:     #D8D3C8;
-    --hold:     #2F6F5E;
-    --breach:   #B4462F;
-    --unknown:  #9A958A;
-    --measure:  34rem;
+    color-scheme: light dark;
+
+    --bg:           #ffffff;
+    --bg-subtle:    #fafafa;
+    --surface:      #ffffff;
+    --surface-2:    #f7f8f9;
+    --border:       #e7e9ec;
+    --border-strong:#d3d7dd;
+
+    --text:         #14181d;
+    --text-muted:   #5c6670;
+    --text-subtle:  #8e969f;
+
+    --accent:       #4f46e5;
+    --accent-text:  #ffffff;
+    --accent-soft:  rgba(79, 70, 229, 0.09);
+
+    --pos:          #067647;
+    --pos-soft:     rgba(6, 118, 71, 0.10);
+    --neg:          #b42318;
+    --neg-soft:     rgba(180, 35, 24, 0.09);
+    --warn:         #b54708;
+    --warn-soft:    rgba(181, 71, 8, 0.10);
+
+    /* Spacing scale. Every margin and pad in the app is one of these. */
+    --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+    --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
+
+    --radius-sm: 6px;
+    --radius:    10px;
+    --radius-lg: 14px;
+
+    --maxw:    1120px;
+    --measure: 68ch;
+
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+            'Helvetica Neue', Arial, sans-serif;
+
+    /* Transitional aliases, so pages not yet restyled keep working. */
+    --ink: var(--text);  --ink-soft: var(--text-muted);
+    --paper: var(--bg);  --rule: var(--border);
+    --hold: var(--pos);  --breach: var(--neg);
+    --unknown: var(--text-subtle);
   }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:           #0c0e11;
+      --bg-subtle:    #101317;
+      --surface:      #14181d;
+      --surface-2:    #191e24;
+      --border:       #252b33;
+      --border-strong:#333b45;
+
+      --text:         #e7eaee;
+      --text-muted:   #9aa4b0;
+      --text-subtle:  #6b7580;
+
+      --accent:       #8b85f0;
+      --accent-text:  #0c0e11;
+      --accent-soft:  rgba(139, 133, 240, 0.14);
+
+      --pos:          #3dd68c;
+      --pos-soft:     rgba(61, 214, 140, 0.13);
+      --neg:          #ff6b5e;
+      --neg-soft:     rgba(255, 107, 94, 0.13);
+      --warn:         #f5a55f;
+      --warn-soft:    rgba(245, 165, 95, 0.13);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg:           #0c0e11;
+    --bg-subtle:    #101317;
+    --surface:      #14181d;
+    --surface-2:    #191e24;
+    --border:       #252b33;
+    --border-strong:#333b45;
+
+    --text:         #e7eaee;
+    --text-muted:   #9aa4b0;
+    --text-subtle:  #6b7580;
+
+    --accent:       #8b85f0;
+    --accent-text:  #0c0e11;
+    --accent-soft:  rgba(139, 133, 240, 0.14);
+
+    --pos:          #3dd68c;
+    --pos-soft:     rgba(61, 214, 140, 0.13);
+    --neg:          #ff6b5e;
+    --neg-soft:     rgba(255, 107, 94, 0.13);
+    --warn:         #f5a55f;
+    --warn-soft:    rgba(245, 165, 95, 0.13);
+  }
+
   * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+
   body {
     margin: 0;
-    background: var(--paper);
-    color: var(--ink);
-    font-family: 'Inter', -apple-system, system-ui, sans-serif;
-    font-size: 16px;
-    line-height: 1.6;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
     -webkit-font-smoothing: antialiased;
-    text-rendering: optimizeLegibility;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: 'cv05' 1;
   }
+
   a { color: inherit; }
-  ::selection { background: var(--ink); color: var(--paper); }
+  ::selection { background: var(--accent); color: var(--accent-text); }
+
+  /* Numbers line up in columns and never jitter as they change. */
+  .num, .n, table.health td, .fig-value, .metric-value {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1, 'cv05' 1;
+  }
+
+  /* Direction, not decoration. */
+  .pos { color: var(--pos); }
+  .neg { color: var(--neg); }
+
+  /* A focus ring that is actually visible, in both themes. */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 """
 
 
