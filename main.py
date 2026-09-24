@@ -685,6 +685,12 @@ def _report_events(response: Response, ticker: str, company: Company | None,
         yield pipeline.Stage("store", pipeline.STAGE_LABELS["store"], "running")
         mark = time.perf_counter()
         store_financials(ticker, fetched.name, fetched.series)
+        # store_financials commits through its own session. This one has been
+        # reading since before that commit, so its transaction holds an older
+        # snapshot; rolling back ends it and forces the re-read below to open
+        # a fresh one. Nothing has been written through this session yet, so
+        # there is nothing to lose.
+        db.rollback()
         company = db.query(Company).filter(Company.ticker == ticker).first()
         if company is None:
             raise HTTPException(status_code=502, detail="Ingestion failed")

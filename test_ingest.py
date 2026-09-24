@@ -655,3 +655,66 @@ def test_bulk_upsert_preserves_nulls_on_update(client, monkeypatch):
         assert row.revenue is None
     finally:
         db.close()
+
+
+# --- two requests ingesting the same cold ticker at once ---
+#
+# Found by loading a cold ticker in a browser: two streams raced, both saw no
+# company, both inserted. The loser's transaction rolled back, and its caller
+# went on holding a Company whose id no longer existed - the report write then
+# failed with a foreign key violation naming a company that was never
+# committed.
+
+def test_concurrent_company_insert_is_recovered(client, monkeypatch):
+    """The loser of the race must adopt the winner's row, not raise."""
+    from sqlalchemy.exc import IntegrityError
+
+    from models import Company as _Company
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
+
+    # Create the company the way the winning request would have, after this
+    # call's SELECT has already come back empty.
+    real_flush_guard = {"tripped": False}
+
+    class _RacingSession:
+        def __init__(self):
+            self._inner = TestingSessionLocal()
+
+        def flush(self, *a, **k):
+            if not real_flush_guard["tripped"]:
+                real_flush_guard["tripped"] = True
+                # Simulate the concurrent winner committing first.
+                other = TestingSessionLocal()
+                try:
+                    other.add(_Company(ticker="RACE", name="Racer"))
+                    other.commit()
+                finally:
+                    other.close()
+                raise IntegrityError("duplicate key", {}, Exception("unique"))
+            return self._inner.flush(*a, **k)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", _RacingSession)
+
+    series = {k: {} for k in ("revenue", "net_income", "operating_cash_flow",
+                              "capex", "equity", "debt_current",
+                              "debt_noncurrent", "cash",
+                              "short_term_investments")}
+    series["net_income"] = {date(2024, 3, 31): 10.0}
+
+    written = store_financials("RACE", "Racer", series)
+    assert written == 1
+
+    db = TestingSessionLocal()
+    try:
+        companies = db.query(_Company).filter(_Company.ticker == "RACE").all()
+        assert len(companies) == 1, "the race produced a duplicate company"
+        from models import Financials
+        rows = db.query(Financials).filter(
+            Financials.company_id == companies[0].id).all()
+        assert len(rows) == 1, "financials were attached to the wrong company"
+    finally:
+        db.close()

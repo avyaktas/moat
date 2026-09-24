@@ -1519,3 +1519,47 @@ def test_cached_report_skips_the_shell_entirely(client, monkeypatch):
     assert resp.status_code == 200
     assert "EventSource" not in resp.text
     assert "WATCH-CASE" in resp.text
+
+
+def test_report_uses_the_committed_company_after_ingest(client, monkeypatch):
+    """store_financials commits through its own session.
+
+    The request session has been reading since before that commit, so its
+    snapshot predates the new company. Carrying a stale object across produced
+    a foreign key violation on the report write, naming a company id that had
+    been rolled back. Observed in a browser on a cold ticker.
+    """
+    from conftest import TestingSessionLocal as _S
+    from models import Company as _C
+
+    def _store(ticker, name, series, sector=None):
+        other = _S()
+        try:
+            other.add(_C(ticker=ticker, name=name))
+            other.commit()
+        finally:
+            other.close()
+        return 1
+
+    monkeypatch.setattr("main.store_financials", _store)
+    monkeypatch.setattr("main.fetch_financials",
+                        lambda t: ("789019", "Newco", {"net_income": {}}))
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Newco"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
+    monkeypatch.setattr("main.synthesize", lambda *a, **k: {
+        "verdict": "WATCH-CASE", "risks": [], "grounding_rate": 1.0})
+
+    resp = client.get("/company/NEWCO/report")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["company"] == "NEWCO"
+
+    # The report row must point at the company that actually exists.
+    db = _S()
+    try:
+        company = db.query(_C).filter(_C.ticker == "NEWCO").one()
+        report = db.query(Report).one()
+        assert report.company_id == company.id
+    finally:
+        db.close()

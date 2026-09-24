@@ -594,7 +594,11 @@ def _report_sheet(report: dict, pending: bool = False) -> str:
     else:
         filing_line = "10-K unavailable"
 
-    body = f"""<div class="sheet">
+    # id="sheet" on every rendering of the sheet, not just the shell's. The
+    # page swaps this element out as each stage lands, so the anchor has to
+    # survive the swap - without it the partial replaced the only element
+    # carrying the id, and the done handler then had nothing to replace.
+    body = f"""<div class="sheet" id="sheet">
 
   <header class="masthead">
     <div>
@@ -632,25 +636,25 @@ def _report_sheet(report: dict, pending: bool = False) -> str:
 
   <section>
     <h2>Hype versus reality</h2>
-    <div class="prose lede">{_pending("Writing analysis&hellip;") if pending
+    <div class="prose lede">{_pending("Writing analysis\u2026") if pending
         else _paragraphs(narrative.get("hype_vs_reality"))}</div>
   </section>
 
   <section>
     <h2>Risks and sell triggers</h2>
-    {_pending("Reading the risk factors&hellip;") if pending
+    {_pending("Reading the risk factors\u2026") if pending
         else _risks(narrative.get("risks", []))}
   </section>
 
   <section>
     <h2>The case</h2>
-    <div class="prose">{_pending("Writing analysis&hellip;") if pending
+    <div class="prose">{_pending("Writing analysis\u2026") if pending
         else _paragraphs(narrative.get("reasoning"))}</div>
   </section>
 
   <section>
     <h2>The strategy</h2>
-    <div class="prose">{_pending("Writing analysis&hellip;") if pending
+    <div class="prose">{_pending("Writing analysis\u2026") if pending
         else _paragraphs(narrative.get("strategy"))}</div>
   </section>
 
@@ -721,6 +725,13 @@ def render_landing() -> str:
         padding: 0 1.5rem; cursor: pointer; transition: background 150ms ease;
       }
       form.search button:hover { background: var(--hold); }
+      .searching {
+        margin: 0.9rem 0 0; min-height: 1.2rem;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+        letter-spacing: 0.08em; color: var(--hold);
+      }
+      form.search button:disabled { background: var(--hold); cursor: default; }
+      form.search input:disabled { color: var(--ink-soft); }
       .examples {
         margin-top: 1.9rem; font-family: 'JetBrains Mono', monospace;
         font-size: 0.75rem; letter-spacing: 0.06em; color: var(--ink-soft);
@@ -756,8 +767,9 @@ def render_landing() -> str:
           <input id="t" name="t" placeholder="Ticker &mdash; e.g. MSFT"
                  aria-label="Ticker" autocomplete="off" autocapitalize="characters"
                  autocorrect="off" spellcheck="false">
-          <button type="submit">Analyze</button>
+          <button type="submit" id="go">Analyze</button>
         </form>
+        <p class="searching" id="searching" aria-live="polite"></p>
         <p class="examples">Try
           <a href="/company/MSFT/report/view">MSFT</a>
           <a href="/company/AAPL/report/view">AAPL</a>
@@ -778,6 +790,15 @@ def render_landing() -> str:
         e.preventDefault();
         var t = inp.value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '');
         if (!t) { inp.focus(); return false; }
+        // Acknowledge the submit before navigating. The next page answers in
+        // milliseconds, but "milliseconds" is not "immediately", and a button
+        // that does nothing visible when pressed is the whole complaint.
+        var btn = document.getElementById('go');
+        btn.textContent = 'Loading ' + t;
+        btn.disabled = true;
+        inp.disabled = true;
+        document.getElementById('searching').textContent =
+          'Opening ' + t + '\u2026';
         window.location.href = '/company/' + encodeURIComponent(t) + '/report/view';
         return false;
       }

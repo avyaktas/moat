@@ -33,15 +33,19 @@ from the SEC and writes it into the database.
     
 """
 
+import logging
 from datetime import date
 
 import requests
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import timing
 from database import SessionLocal
 from models import Company, Financials
+
+logger = logging.getLogger(__name__)
 
 HEADERS = {"User-Agent": "Avyakta Sharma avyaktansharma@gmail.com"}
 
@@ -312,7 +316,22 @@ def store_financials(ticker: str, name: str, series: dict,
         if company is None:
             company = Company(ticker=ticker, name=name, sector=sector)
             db.add(company)
-            db.flush()
+            try:
+                db.flush()
+            except IntegrityError:
+                # Another request ingested the same cold ticker between the
+                # SELECT and the INSERT. companies.ticker is unique, so one of
+                # them loses - and losing is fine, the row it wanted now
+                # exists. Rolling back and re-reading is the whole recovery.
+                #
+                # Without this the loser raised, and worse, its caller went on
+                # holding a Company whose id belonged to a transaction that
+                # had been rolled back: the report write then failed with a
+                # foreign key violation naming a company that never existed.
+                db.rollback()
+                company = db.query(Company).filter(Company.ticker == ticker).one()
+                logger.info("company %s was created concurrently; using id %s",
+                            ticker, company.id)
 
         with timing.stage("db.financials_write"):
             rows = [_row_values(company.id, period, series)

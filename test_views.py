@@ -447,3 +447,51 @@ def test_failure_block_escapes_its_input():
     html = render_failure("<script>x</script>", "<img src=x onerror=y>")
     assert "<script>x</script>" not in html
     assert "<img src=x" not in html
+
+
+# --- the landing page acknowledges a submit immediately ---
+
+def test_landing_page_acknowledges_the_submit():
+    """A button that does nothing visible when pressed is the whole complaint."""
+    html = render_landing()
+    assert "Loading " in html
+    assert "btn.disabled = true" in html
+
+
+def test_landing_page_has_a_live_region_for_the_status():
+    html = render_landing()
+    assert 'aria-live="polite"' in html
+
+
+def test_pending_labels_render_as_text_not_entities():
+    """_pending escapes its argument, so an HTML entity passed in shows up
+    literally. Observed in the browser as "WRITING ANALYSIS&HELLIP;"."""
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert "&HELLIP;" not in html.upper()
+    assert "&amp;hellip;" not in html
+    assert "Writing analysis…" in html
+
+
+def test_every_sheet_rendering_keeps_the_swap_anchor():
+    """The page replaces this element as each stage lands, so the id has to
+    survive the swap.
+
+    Without it the partial replaced the only element carrying id="sheet", and
+    the done handler threw "Cannot set properties of null" - leaving the page
+    on PENDING forever even though the report had been built and cached.
+    Found in a browser; no fragment test in isolation could have caught it.
+    """
+    report = _computed_only_report()
+    assert 'id="sheet"' in render_report_shell("NVDA")
+    assert 'id="sheet"' in render_report_fragment(report, pending=True)
+    report["narrative"] = {"verdict": "WATCH-CASE", "grounding_rate": 1.0,
+                           "hype_vs_reality": "h", "risks": [], "reasoning": "r",
+                           "strategy": "s"}
+    assert 'id="sheet"' in render_report_fragment(report, pending=False)
+    assert 'id="sheet"' in render_report(report)
+
+
+def test_the_swap_anchor_is_unique_per_rendering():
+    """Two elements with the same id would make the swap pick one at random."""
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert html.count('id="sheet"') == 1
