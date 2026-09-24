@@ -102,10 +102,19 @@ def _refresh_requested(refresh: bool, token: str | None) -> bool:
     return True
 
 
-# An exposed deployment with no refresh token is the case worth warning about:
-# anyone can force unlimited paid regeneration. Logged once at import rather
-# than per request.
-if settings.anthropic_key and not settings.refresh_token.strip():
+# Configuration problems worth knowing about before the first request rather
+# than during it. Both are warnings rather than hard failures: the app is
+# genuinely useful without an API key - /companies, /financials and /metrics
+# need only the database - and refusing to boot would break local development
+# and the test suite for no benefit.
+if not settings.anthropic_key:
+    logger.warning(
+        "ANTHROPIC_API_KEY is not set: /brief and /report will fail on any "
+        "cache miss. Every other endpoint works."
+    )
+elif not settings.refresh_token.strip():
+    # An exposed deployment with no refresh token is the case worth warning
+    # about: anyone can force unlimited paid regeneration.
     logger.warning(
         "refresh_token is not set: ?refresh= can force paid regeneration "
         "without a credential"

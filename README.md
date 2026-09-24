@@ -160,16 +160,19 @@ condition is a horoscope.
 Interactive API docs are at `/docs` (FastAPI's generated OpenAPI UI).
 
 A ticker you've never requested gets ingested live and served instantly after
-that. Reports cache for 7 days (they include a live price) with `?refresh=true` to
-force a rebuild. Briefs cache forever, since the 10-K they analyze doesn't change.
+that. Reports cache for 7 days (they include a live price); briefs are cached
+until the company files a newer 10-K, which is checked against the submissions
+index rather than on a timer. `?refresh=true` forces a rebuild of either, and
+can be put behind `REFRESH_TOKEN` so a public deployment isn't handing out a
+free lever on a paid endpoint.
 
 ## Running it
 
 ```bash
 docker compose up --build
-docker compose exec api alembic upgrade head
 docker compose exec api python ingest.py MSFT
 # http://localhost:8000/docs
+# Migrations run automatically on container start.
 ```
 
 Put an `ANTHROPIC_API_KEY` in `.env` for the AI endpoints. See `.env.example`.
@@ -179,19 +182,31 @@ Put an `ANTHROPIC_API_KEY` in `.env` for the AI endpoints. See `.env.example`.
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # requirements.txt alone for runtime
 createdb moat && createdb moat_test
 cp .env.example .env
-# Then edit .env: set DATABASE_URL and TEST_DATABASE_URL to your local
-# Postgres (replace USER with your username). Both must be filled in — an
-# empty TEST_DATABASE_URL will stop the tests from finding a database.
+# Then edit .env: set DATABASE_URL to your local Postgres (replace USER with
+# your username). TEST_DATABASE_URL can be left blank — it falls back to a
+# sensible default.
 alembic upgrade head
 python ingest.py MSFT
 uvicorn main:app --reload
 ```
 
-Tests: `pytest`. Uses an isolated test database (`TEST_DATABASE_URL`) and mocks
-the LLM and SEC calls, so no `ANTHROPIC_API_KEY` and no network are needed.
+Tests: `pytest` — 313 of them, in about 1.5 seconds. They use an isolated test
+database (`TEST_DATABASE_URL`) and mock every upstream, so no
+`ANTHROPIC_API_KEY` and no network are needed; a test that reaches the network
+fails with a message saying which boundary to mock.
+
+Two evaluations, deliberately separate:
+
+- `python grounding_replay.py` — replays recorded model responses through the
+  real grounding path against a pinned filing. Free, offline, deterministic,
+  and runs in CI on every push. It measures the *verifier*.
+- `python evaluate.py` — asks the live model 24 questions about Microsoft's
+  FY2025 risk factors and grades abstention, grounding and hallucinations.
+  Costs a few cents and needs a key. It measures the *model*. Exits non-zero
+  if any quote fails to verify.
 </details>
 
 ## The data problems that took the longest
@@ -217,16 +232,13 @@ instead of duplicating them.
 ## Tech
 
 Python 3.12, FastAPI, PostgreSQL 16, SQLAlchemy 2, Alembic, Anthropic API,
-BeautifulSoup, Docker, pytest, GitHub Actions.
+BeautifulSoup, Docker, pytest, ruff, GitHub Actions.
 
 ## What it doesn't do
 
 - **Banks and insurers.** They file under a different GAAP taxonomy (interest
   income instead of revenue, deposits instead of debt). Rather than force it, the
   pipeline reports honest gaps. About 85% of the S&P 500 is non-financial.
-- **Companies that report cash flow cumulatively.** Apple reports year-to-date
-  within its fiscal year, so only fiscal Q1 has a standalone figure. Fixing it
-  means differencing consecutive periods, same idea as the Q4 derivation.
 - **Proper ROIC.** Mine uses TTM net income over gross debt plus equity. The real
   version uses NOPAT and nets out excess cash. Directionally right, noted in the
   code.
@@ -244,7 +256,9 @@ BeautifulSoup, Docker, pytest, GitHub Actions.
 - [x] Evaluation harness with hallucination traps
 - [x] Scoring framework and full report
 - [x] Caching with per-endpoint invalidation
-- [ ] Vector search for free-form questions (chunking and embeddings are built and
-      tested, pgvector storage is not)
+- [x] Cumulative-filer interim quarters recovered by differencing the YTD chain
+- [ ] Vector search for free-form questions (chunking and embeddings are written
+      and tested, pgvector storage is not; the ~850MB of ML dependencies are not
+      installed by default — see the note in `requirements.txt`)
 - [x] Deployed somewhere
 - [ ] Ranking across a universe of companies
