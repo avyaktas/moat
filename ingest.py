@@ -318,14 +318,26 @@ def store_financials(ticker: str, name: str, series: dict,
             rows = [_row_values(company.id, period, series)
                     for period in sorted(all_periods)]
             if rows:
-                for values in rows:
-                    stmt = pg_insert(Financials).values(**values)
-                    stmt = stmt.on_conflict_do_update(
-                        constraint="uq_company_period",
-                        set_={k: v for k, v in values.items()
-                              if k not in ("company_id", "period_end")},
-                    )
-                    db.execute(stmt)
+                # One multi-row upsert rather than one statement per period.
+                # The loop this replaces issued 77 separate round trips for a
+                # company with a long filing history - invisible against local
+                # Postgres, real against a managed one where each carries
+                # network latency.
+                #
+                # set_ is built from stmt.excluded, the values proposed by
+                # this insert, rather than from a captured dict: with many
+                # rows in flight there is no single dict to refer to, and
+                # excluded is per-row by definition. It also keeps the old
+                # behaviour that a restatement dropping a figure nulls the
+                # column instead of leaving the previous value behind.
+                stmt = pg_insert(Financials).values(rows)
+                updatable = [c for c in rows[0]
+                             if c not in ("company_id", "period_end")]
+                stmt = stmt.on_conflict_do_update(
+                    constraint="uq_company_period",
+                    set_={c: getattr(stmt.excluded, c) for c in updatable},
+                )
+                db.execute(stmt)
             db.commit()
         return len(rows)
     finally:

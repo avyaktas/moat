@@ -543,3 +543,115 @@ def test_row_values_accepts_one_debt_component():
 def test_row_values_leaves_debt_null_when_both_absent():
     series, period = _series_with(revenue=1.0)
     assert _row_values(1, period, series)["total_debt"] is None
+
+
+# --- one statement instead of one per period ---
+#
+# The loop issued a separate db.execute() per period: 77 round trips for a
+# company with a long filing history. Cheap against local Postgres, not
+# against a managed database where each carries real latency.
+
+def test_financials_are_written_in_one_statement(client, monkeypatch):
+    """Counts statements, not rows - the round trips are the cost."""
+    monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
+    series = {k: {} for k in ("revenue", "net_income", "operating_cash_flow",
+                              "capex", "equity", "debt_current",
+                              "debt_noncurrent", "cash",
+                              "short_term_investments")}
+    series["net_income"] = {
+        date(2024, 3, 31): 10.0, date(2024, 6, 30): 20.0,
+        date(2024, 9, 30): 30.0, date(2024, 12, 31): 40.0,
+    }
+
+    executes = []
+    real_session = TestingSessionLocal
+
+    class _CountingSession:
+        def __init__(self):
+            self._inner = real_session()
+
+        def execute(self, stmt, *a, **k):
+            executes.append(stmt)
+            return self._inner.execute(stmt, *a, **k)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", _CountingSession)
+    written = store_financials("MSFT", "Microsoft", series)
+
+    assert written == 4
+    assert len(executes) == 1, (
+        f"{len(executes)} statements for 4 periods; expected a single bulk upsert"
+    )
+
+
+def test_bulk_upsert_writes_every_period(client, monkeypatch):
+    from models import Financials
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
+    series = {k: {} for k in ("revenue", "net_income", "operating_cash_flow",
+                              "capex", "equity", "debt_current",
+                              "debt_noncurrent", "cash",
+                              "short_term_investments")}
+    series["net_income"] = {date(2024, month, 28): float(month) for month in range(1, 13)}
+
+    assert store_financials("MSFT", "Microsoft", series) == 12
+    db = TestingSessionLocal()
+    try:
+        rows = db.query(Financials).order_by(Financials.period_end).all()
+        assert len(rows) == 12
+        assert [float(r.net_income) for r in rows] == [float(m) for m in range(1, 13)]
+    finally:
+        db.close()
+
+
+def test_bulk_upsert_updates_a_restated_figure(client, monkeypatch):
+    """The conflict clause has to survive the move to a multi-row insert."""
+    from models import Financials
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
+
+    def series_with(value):
+        s = {k: {} for k in ("revenue", "net_income", "operating_cash_flow",
+                             "capex", "equity", "debt_current",
+                             "debt_noncurrent", "cash", "short_term_investments")}
+        s["net_income"] = {date(2024, 3, 31): value}
+        return s
+
+    store_financials("MSFT", "Microsoft", series_with(50.0))
+    store_financials("MSFT", "Microsoft", series_with(75.0))
+
+    db = TestingSessionLocal()
+    try:
+        row = db.query(Financials).one()
+        assert float(row.net_income) == 75.0
+    finally:
+        db.close()
+
+
+def test_bulk_upsert_preserves_nulls_on_update(client, monkeypatch):
+    """A restatement that drops a figure must null it, not keep the old one."""
+    from models import Financials
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
+    keys = ("revenue", "net_income", "operating_cash_flow", "capex", "equity",
+            "debt_current", "debt_noncurrent", "cash", "short_term_investments")
+    period = date(2024, 3, 31)
+
+    first = {k: {} for k in keys}
+    first["net_income"] = {period: 50.0}
+    first["revenue"] = {period: 500.0}
+    store_financials("MSFT", "Microsoft", first)
+
+    second = {k: {} for k in keys}
+    second["net_income"] = {period: 50.0}       # revenue no longer reported
+    store_financials("MSFT", "Microsoft", second)
+
+    db = TestingSessionLocal()
+    try:
+        row = db.query(Financials).one()
+        assert float(row.net_income) == 50.0
+        assert row.revenue is None
+    finally:
+        db.close()
