@@ -233,16 +233,18 @@ def get_cik(ticker: str) -> tuple[str, str]:
         raise ValueError(f"Unknown ticker: {ticker}")
     return _ticker_cache[ticker]
 
-def ingest_company(ticker: str, sector: str | None = None) -> int:
-    """Fetch EDGAR data for one company and upsert financials. Returns rows written.
+def fetch_financials(ticker: str) -> tuple[str, str, dict]:
+    """Fetch and extract one company's financials. Network and CPU only.
 
-    The ticker is normalized here rather than at the caller. get_cik already
-    uppercases for its own lookup, so a lowercase argument resolved to the
-    right CIK and then wrote a lowercase companies row - and since the API
-    path uppercases before calling, the two disagreed only when this function
-    was used directly, as its own __main__ block does. A later request for the
-    uppercase ticker then missed that row, tried to insert its own, and turned
-    a difference in case into a unique-constraint 500.
+    Returns (cik, registered_name, series) where series maps each metric to
+    {period_end: value}. Touches no database, holds no session, and shares no
+    mutable state beyond the process-wide CIK cache - so it is safe to run in
+    a worker thread alongside the filing and price fetches, which is what
+    lets those three happen at once instead of in series.
+
+    Split out of ingest_company for exactly that reason. The work divides
+    cleanly: everything here is "ask EDGAR and do arithmetic", everything in
+    store_financials is "write rows".
     """
     ticker = ticker.upper()
     with timing.stage("edgar.cik"):
@@ -260,9 +262,49 @@ def ingest_company(ticker: str, sector: str | None = None) -> int:
             series[key] = derive_q4(quarterly, extract_annual(facts, tags))
         for key, tags in SNAPSHOT_TAGS.items():
             series[key] = extract_quarterly(facts, tags)
-        all_periods = set()
-        for s in series.values():
-            all_periods.update(s.keys())
+
+    return cik, name, series
+
+
+def _row_values(company_id: int, period, series: dict) -> dict:
+    """The financials row for one period, with the two derived columns.
+
+    Both derivations keep the unknown-is-not-zero rule: free cash flow needs
+    both operating cash flow and capex, and total debt needs at least one of
+    its two components. Missing inputs leave the column NULL rather than
+    reporting a partial figure as a whole one.
+    """
+    ocf = series["operating_cash_flow"].get(period)
+    capex = series["capex"].get(period)
+    fcf = (ocf - capex) if (ocf is not None and capex is not None) else None
+
+    dc = series["debt_current"].get(period)
+    dnc = series["debt_noncurrent"].get(period)
+    total_debt = (dc or 0) + (dnc or 0) if (dc is not None or dnc is not None) else None
+
+    return {
+        "company_id": company_id,
+        "period_end": period,
+        "revenue": series["revenue"].get(period),
+        "net_income": series["net_income"].get(period),
+        "free_cash_flow": fcf,
+        "total_debt": total_debt,
+        "shareholders_equity": series["equity"].get(period),
+        "cash": series["cash"].get(period),
+        "short_term_investments": series["short_term_investments"].get(period),
+    }
+
+
+def store_financials(ticker: str, name: str, series: dict,
+                     sector: str | None = None) -> int:
+    """Upsert a company and its quarterly financials. Database only.
+
+    Returns the number of periods written.
+    """
+    ticker = ticker.upper()
+    all_periods: set = set()
+    for s in series.values():
+        all_periods.update(s.keys())
 
     db: Session = SessionLocal()
     try:
@@ -273,44 +315,40 @@ def ingest_company(ticker: str, sector: str | None = None) -> int:
             db.flush()
 
         with timing.stage("db.financials_write"):
-            processed = 0
-            for period in sorted(all_periods):
-                ocf = series["operating_cash_flow"].get(period)
-                capex = series["capex"].get(period)
-                fcf = (ocf - capex) if (ocf is not None and capex is not None) else None
-
-                dc = series["debt_current"].get(period)
-                dnc = series["debt_noncurrent"].get(period)
-                if dc is not None or dnc is not None:
-                    total_debt = (dc or 0) + (dnc or 0)
-                else:
-                    total_debt = None
-
-                values = {
-                    "company_id": company.id,
-                    "period_end": period,
-                    "revenue": series["revenue"].get(period),
-                    "net_income": series["net_income"].get(period),
-                    "free_cash_flow": fcf,
-                    "total_debt": total_debt,
-                    "shareholders_equity": series["equity"].get(period),
-                    "cash": series["cash"].get(period),
-                    "short_term_investments": series["short_term_investments"].get(period),
-                }
-
-                stmt = pg_insert(Financials).values(**values)
-                stmt = stmt.on_conflict_do_update(
-                    constraint="uq_company_period",
-                    set_={k: v for k, v in values.items()
-                          if k not in ("company_id", "period_end")},
-                )
-                db.execute(stmt)
-                processed += 1
-
+            rows = [_row_values(company.id, period, series)
+                    for period in sorted(all_periods)]
+            if rows:
+                for values in rows:
+                    stmt = pg_insert(Financials).values(**values)
+                    stmt = stmt.on_conflict_do_update(
+                        constraint="uq_company_period",
+                        set_={k: v for k, v in values.items()
+                              if k not in ("company_id", "period_end")},
+                    )
+                    db.execute(stmt)
             db.commit()
-        return processed
+        return len(rows)
     finally:
         db.close()
+
+
+def ingest_company(ticker: str, sector: str | None = None) -> int:
+    """Fetch EDGAR data for one company and upsert financials. Returns rows written.
+
+    A composition of fetch_financials and store_financials, kept so the CLI
+    and every existing caller still have one function that does the whole job.
+
+    The ticker is normalized here rather than at the caller. get_cik already
+    uppercases for its own lookup, so a lowercase argument resolved to the
+    right CIK and then wrote a lowercase companies row - and since the API
+    path uppercases before calling, the two disagreed only when this function
+    was used directly, as its own __main__ block does. A later request for the
+    uppercase ticker then missed that row, tried to insert its own, and turned
+    a difference in case into a unique-constraint 500.
+    """
+    ticker = ticker.upper()
+    _cik, name, series = fetch_financials(ticker)
+    return store_financials(ticker, name, series, sector=sector)
 
 
 if __name__ == "__main__":

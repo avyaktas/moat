@@ -432,3 +432,114 @@ def test_ingest_rerun_updates_a_restated_figure(client, monkeypatch):
         assert float(row.net_income) == 75.0
     finally:
         db.close()
+
+
+# --- the fetch/store split ---
+#
+# fetch_financials is network and arithmetic only: no session, no shared
+# mutable state, so it can run in a worker thread alongside the filing and
+# price fetches. store_financials is the database half. ingest_company
+# composes them and is unchanged from the caller's point of view.
+
+from ingest import _row_values, fetch_financials, store_financials
+
+
+def test_fetch_financials_touches_no_database(monkeypatch):
+    """If it needed a session it could not be parallelised."""
+    monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr(ingest_module, "fetch_company_facts", lambda cik: _facts([
+        _entry("2024-01-01", "2024-03-31", 50.0, frame="CY2024Q1"),
+    ], tag="NetIncomeLoss"))
+
+    def _explode():
+        raise AssertionError("fetch_financials opened a database session")
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", _explode)
+    cik, name, series = fetch_financials("msft")
+    assert cik == "789019"
+    assert name == "Microsoft"
+    assert series["net_income"][date(2024, 3, 31)] == 50.0
+
+
+def test_fetch_financials_normalizes_the_ticker(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ingest_module, "get_cik",
+                        lambda t: (seen.append(t), ("789019", "Microsoft"))[1])
+    monkeypatch.setattr(ingest_module, "fetch_company_facts",
+                        lambda cik: {"facts": {"us-gaap": {}}})
+    fetch_financials("msft")
+    assert seen == ["MSFT"]
+
+
+def test_store_financials_writes_the_rows(client, monkeypatch):
+    from models import Financials
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
+    series = {k: {} for k in ("revenue", "net_income", "operating_cash_flow",
+                              "capex", "equity", "debt_current",
+                              "debt_noncurrent", "cash",
+                              "short_term_investments")}
+    series["net_income"] = {date(2024, 3, 31): 50.0, date(2024, 6, 30): 60.0}
+
+    written = store_financials("MSFT", "Microsoft", series)
+    assert written == 2
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(Financials).count() == 2
+    finally:
+        db.close()
+
+
+def test_store_financials_with_no_periods_writes_nothing(client, monkeypatch):
+    from models import Financials
+
+    monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
+    series = {k: {} for k in ("revenue", "net_income", "operating_cash_flow",
+                              "capex", "equity", "debt_current",
+                              "debt_noncurrent", "cash",
+                              "short_term_investments")}
+    assert store_financials("MSFT", "Microsoft", series) == 0
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(Financials).count() == 0
+    finally:
+        db.close()
+
+
+# --- _row_values keeps the unknown-is-not-zero rule ---
+
+def _series_with(**overrides):
+    base = {k: {} for k in ("revenue", "net_income", "operating_cash_flow",
+                            "capex", "equity", "debt_current",
+                            "debt_noncurrent", "cash", "short_term_investments")}
+    period = date(2024, 3, 31)
+    for key, value in overrides.items():
+        base[key] = {period: value}
+    return base, period
+
+
+def test_row_values_derives_free_cash_flow():
+    series, period = _series_with(operating_cash_flow=300.0, capex=100.0)
+    assert _row_values(1, period, series)["free_cash_flow"] == 200.0
+
+
+def test_row_values_leaves_fcf_null_without_capex():
+    series, period = _series_with(operating_cash_flow=300.0)
+    assert _row_values(1, period, series)["free_cash_flow"] is None
+
+
+def test_row_values_sums_debt_components():
+    series, period = _series_with(debt_current=10.0, debt_noncurrent=90.0)
+    assert _row_values(1, period, series)["total_debt"] == 100.0
+
+
+def test_row_values_accepts_one_debt_component():
+    series, period = _series_with(debt_noncurrent=90.0)
+    assert _row_values(1, period, series)["total_debt"] == 90.0
+
+
+def test_row_values_leaves_debt_null_when_both_absent():
+    series, period = _series_with(revenue=1.0)
+    assert _row_values(1, period, series)["total_debt"] is None
