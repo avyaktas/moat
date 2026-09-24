@@ -862,3 +862,18 @@ def test_wide_content_scrolls_inside_its_own_container():
     from views import _REPORT_CSS
 
     assert ".table-scroll { overflow-x: auto; }" in _REPORT_CSS
+
+
+def test_the_404_offers_a_way_to_try_again():
+    """The reason you are here is almost always a mistyped ticker, and the
+    fix is to type another one - not to go back and start over."""
+    html = render_not_found("Unknown ticker: ZZZZ")
+    assert "<form" in html
+    assert "Try another ticker" in html
+    assert "inp.focus();" in html
+
+
+def test_the_404_still_says_what_went_wrong():
+    html = render_not_found("Unknown ticker: ZZZZ")
+    assert "Unknown ticker: ZZZZ" in html
+    assert 'href="/"' in html

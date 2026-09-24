@@ -1323,43 +1323,102 @@ def render_landing() -> str:
 
 
 def render_not_found(detail: str) -> str:
-    """A small, on-brand 404 for /company/* misses (bad ticker, no filing),
-    instead of a raw JSON error, with a way back to the search box."""
+    """A small, on-brand 404 for /company/* misses (bad ticker, no filing).
+
+    It offers the search box rather than only a way back to it: the reason
+    you are here is almost always a mistyped ticker, and the fix is to type
+    another one.
+    """
     css = """
       .nf { min-height: 100vh; display: flex; align-items: center;
-            justify-content: center; text-align: center; padding: 2rem; }
-      .nf-inner { max-width: 34rem; }
-      .nf .eyebrow {
-        font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
-        letter-spacing: 0.16em; text-transform: uppercase;
-        color: var(--ink-soft); margin: 0 0 1rem;
+            justify-content: center; padding: var(--s5); }
+      .nf-inner { max-width: 420px; width: 100%; text-align: center; }
+      .nf-icon {
+        width: 44px; height: 44px; margin: 0 auto var(--s4);
+        display: flex; align-items: center; justify-content: center;
+        border-radius: 12px; background: var(--neg-soft); color: var(--neg);
       }
       .nf h1 {
-        font-family: 'Instrument Serif', Georgia, serif; font-weight: 400;
-        font-size: clamp(3rem, 11vw, 5rem); line-height: 0.9;
-        margin: 0 0 1.1rem; color: var(--breach);
+        font-size: 1.4rem; font-weight: 600; letter-spacing: -0.02em;
+        margin: 0 0 var(--s2);
       }
       .nf .detail {
-        font-family: 'JetBrains Mono', monospace; font-size: 0.9rem;
-        color: var(--ink); margin: 0 0 2.25rem;
+        font-size: 0.95rem; color: var(--text-muted); margin: 0 0 var(--s5);
       }
-      .nf a.back {
-        font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
-        letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none;
-        color: var(--paper); background: var(--ink); padding: 0.75rem 1.4rem;
-        display: inline-block; transition: background 150ms ease;
+      .field {
+        display: flex; align-items: center; gap: var(--s2);
+        background: var(--surface); border: 1px solid var(--border-strong);
+        border-radius: var(--radius); padding: 0 var(--s2) 0 var(--s4);
+        text-align: left;
       }
-      .nf a.back:hover { background: var(--hold); }
+      .field:focus-within {
+        border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+      }
+      .field svg { flex: none; color: var(--text-subtle); }
+      .field input {
+        flex: 1; font: inherit; font-size: 0.95rem; font-weight: 500;
+        letter-spacing: 0.04em; color: var(--text); background: transparent;
+        border: none; outline: none; padding: 12px 0; min-width: 0;
+      }
+      .field input::placeholder { color: var(--text-subtle); letter-spacing: 0;
+                                  font-weight: 400; }
+      .field button {
+        flex: none; font: inherit; font-size: 0.82rem; font-weight: 550;
+        color: var(--accent-text); background: var(--accent); border: none;
+        border-radius: var(--radius-sm); padding: 8px var(--s4); cursor: pointer;
+      }
+      .field button:hover { opacity: 0.88; }
+      .nf .home {
+        display: inline-block; margin-top: var(--s5); font-size: 0.85rem;
+        color: var(--text-subtle); text-decoration: none;
+      }
+      .nf .home:hover { color: var(--text); }
     """
     body = f"""
     <div class="nf"><div class="nf-inner">
-      <p class="eyebrow">Moat</p>
+      <div class="nf-icon" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.7"/>
+          <path d="M10 6.2v4.4" stroke="currentColor" stroke-width="1.7"
+                stroke-linecap="round"/>
+          <circle cx="10" cy="13.6" r="0.95" fill="currentColor"/>
+        </svg>
+      </div>
       <h1>Not found</h1>
       <p class="detail">{esc(detail)}</p>
-      <a class="back" href="/">&larr; Back to search</a>
+      <form class="search" role="search" onsubmit="return moatGo(event)">
+        <div class="field">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none"
+               aria-hidden="true">
+            <circle cx="7" cy="7" r="4.6" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.6"
+                  stroke-linecap="round"/>
+          </svg>
+          <input id="t" placeholder="Try another ticker" aria-label="Ticker"
+                 autocomplete="off" autocapitalize="characters" autocorrect="off"
+                 spellcheck="false" maxlength="10">
+          <button type="submit">Analyze</button>
+        </div>
+      </form>
+      <a class="home" href="/">&larr; Back to search</a>
     </div></div>
+    <script>
+      var inp = document.getElementById('t');
+      inp.addEventListener('input', function () {{
+        inp.value = inp.value.toUpperCase();
+      }});
+      function moatGo(e) {{
+        e.preventDefault();
+        var t = inp.value.trim().toUpperCase().replace(/[^A-Z0-9.-]/g, '');
+        if (!t) {{ inp.focus(); return false; }}
+        window.location.href = '/company/' + encodeURIComponent(t) + '/report/view';
+        return false;
+      }}
+      inp.focus();
+    </script>
     """
-    return _document("Not found · Moat", body, css)
+    return _document("Not found \u00b7 Moat", body, css)
+
 
 # ---------------------------------------------------- the progressive report
 #
