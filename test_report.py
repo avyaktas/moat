@@ -141,3 +141,134 @@ def test_report_partial_data_yields_mixed_statuses():
     statuses = [c["status"] for c in data["scorecard"]["checks"]]
     assert "UNKNOWN" in statuses
     assert "PASS" in statuses or "FAIL" in statuses
+
+# --- what the model actually receives ---
+#
+# report.py's own _f() docstring says the model should see real numbers, not
+# strings of 28-digit precision - but _f() was only ever applied to the `ttm`
+# block. The scorecard, valuation and financial-health figures went through
+# json.dumps(default=str), which turned every Decimal off a Numeric column
+# into a quoted string like "20.83333333333333333333333333".
+#
+# "The model narrates but never calculates" is weaker when the figures arrive
+# as strings: a model handed "2500" has to decide it is a number before it can
+# reason about it, and the prompt's "if a figure is null, say so" contract
+# blurs when nulls and values are both text.
+
+from decimal import Decimal
+
+import report as report_module
+
+
+class _CapturingClient:
+    """Stands in for Anthropic, recording the prompt instead of sending it."""
+
+    def __init__(self, reply: str):
+        self.captured = None
+        self._reply = reply
+        self.messages = self
+
+    def create(self, **kwargs):
+        self.captured = kwargs["messages"][0]["content"]
+
+        class _Block:
+            type = "text"
+            text = self._reply_text
+
+        block = _Block()
+        block.text = self._reply
+
+        class _Response:
+            content = [block]
+
+        return _Response()
+
+    _reply_text = ""
+
+
+def _decimal_rows(n: int = 8) -> list[FakeRow]:
+    """Rows carrying Decimals, exactly as they come off Numeric columns."""
+    return [
+        FakeRow(
+            period_end=date(2026, 3, 31),
+            revenue=Decimal("100"),
+            net_income=Decimal("30"),
+            free_cash_flow=Decimal("25"),
+            total_debt=Decimal("40"),
+            shareholders_equity=Decimal("400"),
+            cash=Decimal("32"),
+            short_term_investments=Decimal("46"),
+        )
+        for _ in range(n)
+    ]
+
+
+def _synthesis_payload() -> str:
+    """Run synthesize against a capturing client and return the prompt text."""
+    data = build_report_data(_decimal_rows(), {"market_cap": Decimal("2500")})
+    client = _CapturingClient('{"verdict": "WATCH-CASE", "risks": []}')
+    report_module.synthesize(data, "ITEM 1A. RISK FACTORS text", "Test Co",
+                             client=client)
+    return client.captured
+
+
+def test_synthesis_payload_has_no_stringified_numbers():
+    """No computed figure reaches the model wrapped in quotes."""
+    import json as _json
+    import re
+
+    payload = _synthesis_payload()
+    figures = re.search(r"<computed_figures>\n(.*)\n</computed_figures>",
+                        payload, re.DOTALL).group(1)
+    parsed = _json.loads(figures)
+
+    def walk(node, path="figures"):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, f"{path}.{k}")
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f"{path}[{i}]")
+        elif isinstance(node, str):
+            # A numeric-looking string is a Decimal that escaped coercion.
+            assert not re.fullmatch(r"-?\d+(\.\d+)?", node), (
+                f"{path} reached the model as the string {node!r}, not a number"
+            )
+
+    walk(parsed)
+
+
+def test_synthesis_payload_keeps_full_precision_as_floats():
+    """Coercion must not stringify, and must not lose the value either."""
+    import json as _json
+    import re
+
+    payload = _synthesis_payload()
+    figures = re.search(r"<computed_figures>\n(.*)\n</computed_figures>",
+                        payload, re.DOTALL).group(1)
+    parsed = _json.loads(figures)
+
+    assert isinstance(parsed["scorecard"]["valuation"]["market_cap"], (int, float))
+    assert parsed["scorecard"]["valuation"]["market_cap"] == 2500.0
+    # p_e = 2500 / 120 -> a repeating Decimal; it must arrive as a float.
+    p_e = parsed["scorecard"]["valuation"]["p_e"]
+    assert isinstance(p_e, float)
+    assert abs(p_e - 2500 / 120) < 1e-9
+
+
+def test_synthesis_payload_preserves_nulls_as_json_null():
+    """An unavailable figure must stay null, never the string 'None'."""
+    import json as _json
+    import re
+
+    data = build_report_data(
+        [FakeRow(period_end=date(2026, 3, 31)) for _ in range(8)], None
+    )
+    client = _CapturingClient('{"verdict": "WATCH-CASE", "risks": []}')
+    report_module.synthesize(data, "filing text", "Test Co", client=client)
+    figures = re.search(r"<computed_figures>\n(.*)\n</computed_figures>",
+                        client.captured, re.DOTALL).group(1)
+    parsed = _json.loads(figures)
+
+    assert parsed["ttm"]["revenue"] is None
+    assert "None" not in figures

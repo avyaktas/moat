@@ -27,6 +27,7 @@ THE VERDICT IS A FRAMEWORK CONCLUSION, NOT ADVICE
 import json
 
 from analysis import answer_question, check_quote
+from serialization import to_jsonable
 from metrics import (
     debt_to_equity,
     fcf_margin,
@@ -215,7 +216,11 @@ def synthesize(report_data: dict, filing_text: str, company_name: str,
 
     client = client or Anthropic(api_key=settings.anthropic_key)
 
-    figures = json.dumps(report_data, indent=2, default=str)
+    # default=to_jsonable, not default=str. The same boundary that guards the
+    # cache write guards the prompt: Decimals arrive as numbers rather than as
+    # 28-digit strings, and an unexpected type fails here instead of being
+    # quietly handed to the model as text.
+    figures = json.dumps(report_data, indent=2, default=to_jsonable)
     user_message = (
         f"<company>{company_name}</company>\n\n"
         f"<computed_figures>\n{figures}\n</computed_figures>\n\n"

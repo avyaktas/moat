@@ -24,21 +24,12 @@ from filings import get_risk_factors
 
 from ingest import get_cik
 
-from decimal import Decimal
+from serialization import to_jsonable
 
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-
-def to_jsonable(v):
-    """Cache-write boundary: Decimals become floats, dates become ISO strings.
-    Anything else unexpected fails loudly instead of being silently stringified."""
-    if isinstance(v, Decimal):
-        return float(v)
-    if hasattr(v, "isoformat"):  # date, datetime
-        return v.isoformat()
-    raise TypeError(f"Not JSON serializable: {type(v)}")
 
 def get_or_ingest_company(ticker: str, db: Session) -> Company:
     """Retur the company, ingesting it on first request.
