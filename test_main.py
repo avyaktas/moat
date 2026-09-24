@@ -367,3 +367,86 @@ def test_view_route_still_returns_html(client, monkeypatch):
     assert resp.status_code == 404
     assert resp.headers["content-type"].startswith("text/html")
     assert "Not found" in resp.text
+
+
+# --- SEC failures are upstream failures, not our bugs ---
+#
+# get_or_ingest_company caught only ValueError, but every SEC call ends in
+# raise_for_status(). The SEC throttles at 10 req/s, so a 429 or a 503 is an
+# ordinary event - and it surfaced as an unhandled 500 with a stack trace,
+# which reads as "this application is broken" rather than "the source is busy".
+
+import requests
+
+
+def _sec_down(*a, **k):
+    resp = requests.Response()
+    resp.status_code = 429
+    raise requests.HTTPError("429 Too Many Requests", response=resp)
+
+
+def _sec_unreachable(*a, **k):
+    raise requests.ConnectionError("connection refused")
+
+
+def test_sec_rate_limit_during_ingest_is_502(client, monkeypatch):
+    monkeypatch.setattr("main.ingest_company", _sec_down)
+    resp = client.get("/company/NEWCO")
+    assert resp.status_code == 502
+    assert "EDGAR" in resp.json()["detail"]
+
+
+def test_sec_unreachable_during_ingest_is_502(client, monkeypatch):
+    monkeypatch.setattr("main.ingest_company", _sec_unreachable)
+    resp = client.get("/company/NEWCO")
+    assert resp.status_code == 502
+
+
+def test_unknown_ticker_is_still_404_not_502(client, monkeypatch):
+    """The 429 mapping must not swallow the genuine not-found case."""
+    monkeypatch.setattr("main.ingest_company", _raise_unknown)
+    resp = client.get("/company/FAKE")
+    assert resp.status_code == 404
+
+
+def test_brief_returns_502_when_sec_is_down(client, monkeypatch):
+    """The filing IS the brief. Without it there is nothing to degrade to."""
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_risk_factors", _sec_down)
+    resp = client.get("/company/MSFT/brief")
+    assert resp.status_code == 502
+
+
+def test_report_degrades_when_sec_filing_is_unavailable(client, monkeypatch):
+    """The computed figures do not come from the filing, so they survive it.
+
+    Consistent with how a synthesis failure is handled: give back what was
+    computed, mark the narrative absent, and do not cache the degraded result.
+    """
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", _sec_down)
+
+    resp = client.get("/company/MSFT/report")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["narrative"] is None
+    assert body["data"]["ttm"]["revenue"] == 100.0
+    assert body["sources"]["filing"] is None
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(Report).count() == 0
+    finally:
+        db.close()
+
+
+def test_report_degrades_when_cik_lookup_fails(client, monkeypatch):
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_cik", _sec_unreachable)
+
+    resp = client.get("/company/MSFT/report")
+    assert resp.status_code == 200
+    assert resp.json()["narrative"] is None

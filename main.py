@@ -13,6 +13,7 @@ from report import SynthesisError, build_report_data, synthesize
 from datetime import datetime, timedelta, timezone
 from views import render_report, render_landing, render_not_found
 import time
+import requests
 from anthropic import APIError
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -40,15 +41,45 @@ def get_or_ingest_company(ticker: str, db: Session) -> Company:
     company = db.query(Company).filter(Company.ticker == ticker).first()
     if company is not None:
         return company
-    try: 
+    try:
         ingest_company(ticker)
     except ValueError:
-        raise HTTPException(status_code=404, detail=f"Unkown ticker: {ticker}")
-    
+        # The SEC's ticker file does not list it. That is a real 404: no
+        # amount of retrying will produce this company.
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+    except requests.RequestException as exc:
+        # The SEC was unreachable, slow, or throttling - it rate-limits at
+        # 10 req/s, so a 429 is an ordinary event rather than an exception.
+        # Every SEC call ends in raise_for_status(), and catching only
+        # ValueError let those escape as a 500 with a stack trace, which
+        # blames this application for the upstream being busy.
+        logger.warning("SEC unavailable while ingesting %s: %s", ticker, exc)
+        raise HTTPException(
+            status_code=502,
+            detail="SEC EDGAR is unavailable right now; please try again shortly.",
+        ) from exc
+
     company = db.query(Company).filter(Company.ticker == ticker).first()
     if company is None:
         raise HTTPException(status_code=502, detail="Ingestion failed")
     return company
+
+
+def _fetch_filing(ticker: str) -> dict | None:
+    """Fetch a company's latest Risk Factors, or None if the SEC would not say.
+
+    Returning None rather than raising is what lets /report degrade instead of
+    dying: the computed figures come from already-stored financials and do not
+    need the filing, so an EDGAR outage should cost the narrative and nothing
+    else. /brief takes the opposite view and raises, because there the filing
+    IS the product.
+    """
+    try:
+        cik, _ = get_cik(ticker)
+        return get_risk_factors(cik)
+    except requests.RequestException as exc:
+        logger.warning("SEC unavailable while fetching filing for %s: %s", ticker, exc)
+        return None
     
 
 
@@ -164,7 +195,15 @@ DEFAULT_QUESTION = "What are the most significant risks this company identifies,
 @app.get("/company/{ticker}/brief")
 def get_brief(ticker: str, question: str = DEFAULT_QUESTION, db: Session = Depends(get_db)):
     company = get_or_ingest_company(ticker, db)
-    cik, _ = get_cik(company.ticker)
+    try:
+        cik, _ = get_cik(company.ticker)
+    except requests.RequestException as exc:
+        logger.warning("SEC unavailable during CIK lookup for %s: %s",
+                       company.ticker, exc)
+        raise HTTPException(
+            status_code=502,
+            detail="SEC EDGAR is unavailable right now; please try again shortly.",
+        ) from exc
     #cache check
     cached = (
         db.query(Brief)
@@ -175,7 +214,15 @@ def get_brief(ticker: str, question: str = DEFAULT_QUESTION, db: Session = Depen
         return _brief_to_dict(cached)
 
     # cache miss: fetch filing, run analysis
-    filing = get_risk_factors(cik)
+    try:
+        filing = get_risk_factors(cik)
+    except requests.RequestException as exc:
+        logger.warning("SEC unavailable while fetching filing for %s: %s",
+                       company.ticker, exc)
+        raise HTTPException(
+            status_code=502,
+            detail="SEC EDGAR is unavailable right now; please try again shortly.",
+        ) from exc
 
     if filing is None:
         raise HTTPException(status_code=404, detail="No 10-K filing found")
@@ -247,7 +294,6 @@ def get_report(ticker: str, refresh: bool = False, db: Session = Depends(get_db)
             return payload
 
     # cache miss or stale: build it
-    cik, _ = get_cik(company.ticker)
     rows = (
         db.query(Financials)
         .filter(Financials.company_id == company.id)
@@ -259,7 +305,7 @@ def get_report(ticker: str, refresh: bool = False, db: Session = Depends(get_db)
     if "error" in data:
         raise HTTPException(status_code=404, detail=data["error"])
 
-    filing = get_risk_factors(cik)
+    filing = _fetch_filing(company.ticker)
     narrative = None
     if filing:
         for attempt in range(SYNTHESIS_ATTEMPTS):
