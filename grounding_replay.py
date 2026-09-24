@@ -49,6 +49,16 @@ VERBATIM = "We face significant competition from firms that provide competing pl
 CROSS_LINE = "Competition in the technology sector Our competitors range in size"
 NBSP_SPAN = "PART I Item 1A Business model competition"
 
+# A real passage as the model actually typed it in a live eval run: the filing
+# has curly quotes around NOPAs, the model wrote straight ones. This exact
+# string was reported as fabricated and dropped the grounding rate to 94%.
+TYPOGRAPHIC_REAL = (
+    'We are currently under IRS audit for prior tax years and have received '
+    'Notices of Proposed Adjustment ("NOPAs") from the IRS for the tax years '
+    "2004 to 2013. The primary issues in the NOPAs relate to intercompany "
+    "transfer pricing."
+)
+
 # --- inventions: plausible, fluent, and absent from the document ------------
 
 FABRICATED = "We expect our cloud revenue to grow by at least 20% annually."
@@ -92,6 +102,44 @@ CASES = [
         "why": "compact() lowercases, so case drift must not fail a real quote.",
         "reply": _reply(True, "Platform competition.", [VERBATIM.upper()]),
         "expect": {"checks": [True], "grounding_rate": 1.0, "addressed": True},
+    },
+    {
+        "id": "typographic_quotes_recorded",
+        "why": (
+            "Recorded from a live eval failure. The filing is typeset and has "
+            "curly quotes around NOPAs; the model typed straight ones. A real "
+            "passage was called fabricated, for 94% grounding."
+        ),
+        "reply": _reply(True, "The filing quantifies the IRS dispute.",
+                        [TYPOGRAPHIC_REAL]),
+        "expect": {"checks": [True], "grounding_rate": 1.0, "addressed": True},
+    },
+    {
+        "id": "curly_apostrophe",
+        "why": (
+            "This section alone has 20 curly apostrophes. The filing says "
+            "Microsoft\u2019s with a curly one; a model types a straight one, "
+            "and that must not read as invention."
+        ),
+        "reply": _reply(
+            True, "Regulation affects the business.",
+            ["rulemakings could adversely affect Microsoft's business, strategy, "
+             "and operations"],
+        ),
+        "expect": {"checks": [True], "grounding_rate": 1.0, "addressed": True},
+    },
+    {
+        "id": "curly_apostrophe_still_catches_invention",
+        "why": (
+            "The folding forgives a glyph, not a claim. Same sentence shape, "
+            "wrong content, must still fail."
+        ),
+        "reply": _reply(
+            True, "Regulation helps the business.",
+            ["rulemakings could favourably advance Microsoft's business, "
+             "strategy, and operations"],
+        ),
+        "expect": {"checks": [False], "grounding_rate": 0.0, "addressed": True},
     },
     {
         "id": "fabricated",

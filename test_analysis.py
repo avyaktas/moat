@@ -97,3 +97,66 @@ def test_short_quote_still_matches_documented_behaviour():
     that if the floor is ever introduced, it fails loudly here first.
     """
     assert check_quote("We", SOURCE) is True
+
+
+# --- typographic punctuation ---
+#
+# Filings are typeset: they use curly quotes, curly apostrophes, en and em
+# dashes, and bullets. A model quoting them types ASCII. The document contains
+# (“NOPAs”) and the model wrote ("NOPAs"), so a quote that genuinely appears
+# in the filing was reported as fabricated - a false negative in the one check
+# the project's credibility rests on.
+#
+# This is the same class of problem as the non-breaking space compact()
+# already forgives: a difference in rendering, not in content. No fabrication
+# survives it, because inventing prose that matches the source character for
+# character apart from quote glyphs is not a realistic failure mode.
+
+TYPOGRAPHIC = (
+    "The IRS issued Notices of Proposed Adjustment (“NOPAs”) "
+    "regarding Microsoft’s intercompany transfer pricing—a "
+    "long-running dispute… covering 2004 to 2013."
+)
+
+
+def test_curly_double_quotes_match_straight_ones():
+    assert check_quote('Notices of Proposed Adjustment ("NOPAs")', TYPOGRAPHIC) is True
+
+
+def test_curly_apostrophe_matches_straight_one():
+    assert check_quote("Microsoft's intercompany transfer pricing", TYPOGRAPHIC) is True
+
+
+def test_em_dash_matches_hyphen():
+    assert check_quote("transfer pricing-a long-running dispute", TYPOGRAPHIC) is True
+
+
+def test_ellipsis_character_matches_three_periods():
+    assert check_quote("a long-running dispute... covering 2004", TYPOGRAPHIC) is True
+
+
+def test_the_reverse_direction_also_matches():
+    """Source straight, quote curly - a model may typeset too."""
+    source = 'The company\'s "platform" competitors'
+    assert check_quote('The company’s “platform” competitors', source) is True
+
+
+def test_bullets_are_treated_as_layout():
+    source = "risks include:\n• competition\n• regulation"
+    assert check_quote("competition regulation", source) is True
+
+
+def test_folding_does_not_forgive_fabrication():
+    """The loosening must not make invented content pass."""
+    assert check_quote("The IRS issued no adjustments whatsoever", TYPOGRAPHIC) is False
+    assert check_quote("Microsoft's dispute covering 2020 to 2024", TYPOGRAPHIC) is False
+
+
+def test_folding_does_not_collapse_distinct_words():
+    assert check_quote("transfer pricing dispute", "transfer pricing agreement") is False
+
+
+def test_normalize_preserves_typography_for_display():
+    """compact() folds for comparison; normalize() is for showing a human the
+    text as written, so it must not rewrite the author's punctuation."""
+    assert "’" in normalize("Microsoft’s risk")
