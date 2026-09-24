@@ -1,19 +1,19 @@
-"""This file is the EDGAR ingestion pipeline: it fetches real filled financials
+"""This file is the EDGAR ingestion pipeline: it fetches real filed financials
 from the SEC and writes it into the database.
 
 1. FETCH (fetch_company_facts)
-    Calls the SEC's EDGAR API for a company, udentified by its CIK.
-    THe CIK it the SEC's company ID, 0-padded to 10 digits. 
+    Calls the SEC's EDGAR API for a company, identified by its CIK.
+    The CIK is the SEC's company ID, 0-padded to 10 digits. 
     Then it returns a JSON containing every numeric fact the comapany has
     ever filed (revenue, income, assets, etc.) across all years and filings. 
-    no API key needed but the SEC needs my name and emial. 
+    no API key needed but the SEC needs my name and email. 
     raise_for_status() makes a bad HTTP response fail loudly. 
     
 2. EXTRACT (extract_quarterly)
-    The raw JSOn has a GAAP tag for each concept and the same period
+    The raw JSON has a GAAP tag for each concept and the same period
     can appear many times, so keep only the entries that are filed
     quarterly. It uses the SEC's canonical-period marker which filter
-    the annual duplicates. The fates arrive as strings and then parsed into 
+    the annual duplicates. The dates arrive as strings and are then parsed into
     python date objects. 
     Output per tag: {period_end_date: value}
     {} if gaps in data
@@ -28,8 +28,8 @@ from the SEC and writes it into the database.
     
 4. LOAD (part of ingest_company)
     Looks up company by ticker, creating it if new. 
-    For each period: skip if a row for (company, period) alr exists. 
-    Makes scripd idempotent: safe to run repeatedlt, reruns write 0 new rows.
+    For each period: skip if a row for (company, period) already exists. 
+    Makes the script idempotent: safe to run repeatedly; reruns write 0 new rows.
     
 """
 
@@ -44,9 +44,9 @@ from models import Company, Financials
 
 HEADERS = {"User-Agent": "Avyakta Sharma avyaktansharma@gmail.com"}
 
-# metric we are looking for
+# the metrics we are looking for
 
-# split in two se we can get Q4
+# split in two so we can derive Q4
 FLOW_TAGS = {
     "revenue": [
         "RevenueFromContractWithCustomerExcludingAssessedTax",

@@ -113,10 +113,10 @@ DEFAULT_COMPANIES_PAGE = 100
 MAX_COMPANIES_PAGE = 500
 
 def get_or_ingest_company(ticker: str, db: Session) -> Company:
-    """Retur the company, ingesting it on first request.
+    """Return the company, ingesting it on first request.
     Read through cache: known tickers are served from Postgres, 
-    unkown ones trigger a live EDGAR fetch, after which they've cached. 
-    Tickers SEC has never heard of stil 404"""
+    unknown ones trigger a live EDGAR fetch, after which they are cached.
+    Tickers the SEC has never heard of still 404."""
     ticker = ticker.upper()
     company = db.query(Company).filter(Company.ticker == ticker).first()
     if company is not None:

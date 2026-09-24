@@ -1,9 +1,9 @@
 """ LLM analysis of 10-K filing text with enforced grounding.
 
 PROBLEM BEING SOLVED: A language model asked "Does Microsoft compete with Google?" will answer yes because it knows that
-from its training, not from the filing. For this financial analysis that is bad becasue the answer is plausible and unsupported. 
+from its training, not from the filing. For this financial analysis that is bad because the answer is plausible and unsupported. 
 
-APPROACH: Every claimmust be accompanied by a source from document. Quotes from the source are checked by a string machine, and 
+APPROACH: Every claim must be accompanied by a source from document. Quotes from the source are checked by a string machine, and 
 if a quote is not in the document the model fabricated it. Quote is either there or it isnt. 
 
 Model is also required to answer "not addressed" when the document does not cover a question rather than filing it with
@@ -51,7 +51,7 @@ markdown fences:
 
 
 def normalize(text:str) -> str:
-    """Colapses whitspace runs to single spaces. Used for display"""
+    """Collapse whitespace runs to single spaces. Used for display."""
     return re.sub(r"\s+", " ", text.replace("\xa0", " ")).strip()
 
 # Filings are typeset; models type ASCII. A 10-K contains curly quotes, curly
