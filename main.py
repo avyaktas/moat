@@ -516,6 +516,14 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+# Bump when the report's rendered HTML changes shape. The validator is
+# derived from the report's data, so without this a redesign ships to a
+# browser that keeps serving the old markup from its own cache until the
+# max-age expires - which is exactly what happened while building the new
+# layout: the server had changed and the page had not.
+RENDER_VERSION = "2"
+
+
 def _report_etag(ticker: str, generated_at: datetime) -> str:
     """A validator for one company's report as generated at one instant.
 
@@ -523,8 +531,12 @@ def _report_etag(ticker: str, generated_at: datetime) -> str:
     so it can be computed from the cache row alone - before the payload column
     is parsed. That is what lets a conditional request be answered without
     deserializing the report at all.
+
+    RENDER_VERSION is folded in because the same data rendered by a different
+    template is a different response, and a validator that says otherwise
+    hands back stale markup.
     """
-    raw = f"{ticker}|{_as_utc(generated_at).isoformat()}"
+    raw = f"{ticker}|{_as_utc(generated_at).isoformat()}|v{RENDER_VERSION}"
     return '"' + hashlib.sha256(raw.encode()).hexdigest()[:32] + '"'
 
 

@@ -606,3 +606,141 @@ def test_example_tickers_are_still_offered():
     html = render_landing()
     for ticker in ("MSFT", "AAPL", "NVDA", "IBM"):
         assert f"/company/{ticker}/report/view" in html
+
+
+# --- the report layout ---
+
+def test_verdict_renders_as_a_colour_coded_badge():
+    r = _computed_only_report()
+    for verdict, cls in (("BUY-CASE", "buy"), ("WATCH-CASE", "watch"),
+                         ("AVOID-CASE", "avoid")):
+        r["narrative"] = {"verdict": verdict, "grounding_rate": 1.0,
+                          "hype_vs_reality": "h", "risks": [], "reasoning": "r",
+                          "strategy": "s"}
+        html = render_report_fragment(r, pending=False)
+        assert f'class="badge {cls}"' in html, f"{verdict} badge missing"
+
+
+def test_an_unknown_verdict_gets_the_neutral_badge():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert 'class="badge none"' in html
+
+
+def test_negative_changes_are_red_and_positive_green():
+    """Direction is the point of the change column."""
+    html = render_report_fragment(_report_with_health({
+        "cash": {"prior": 10.0, "current": 5.0, "change": -5_000_000_000.0},
+        "total_debt": {"prior": 5.0, "current": 10.0, "change": 5_000_000_000.0},
+        "survivability": {"verdict": ""},
+    }), pending=True)
+    assert '<span class="neg">-$5.0B</span>' in html
+    assert '<span class="pos">$5.0B</span>' in html
+
+
+def test_an_unknown_change_gets_no_colour():
+    """Missing is not a direction."""
+    html = render_report_fragment(_report_with_health({
+        "cash": {"prior": None, "current": None, "change": None},
+        "survivability": {"verdict": ""},
+    }), pending=True)
+    row = html.split("Cash")[1].split("</tr>")[0]
+    assert "pos" not in row and "neg" not in row
+    assert EM_DASH in row
+
+
+def test_a_zero_change_gets_no_colour():
+    html = render_report_fragment(_report_with_health({
+        "cash": {"prior": 1.0, "current": 1.0, "change": 0.0},
+        "survivability": {"verdict": ""},
+    }), pending=True)
+    row = html.split("Cash")[1].split("</tr>")[0]
+    assert "pos" not in row and "neg" not in row
+
+
+def test_the_meter_has_one_segment_per_criterion():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert html.count('class="seg ') == 2   # the sample report has two checks
+
+
+def test_the_meter_is_described_for_screen_readers():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert 'role="img"' in html
+    assert "criteria hold" in html
+
+
+def test_the_scorecard_is_a_grid_of_cards():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert 'class="checks"' in html
+    assert 'class="check pass"' in html
+    assert 'class="check fail"' in html
+
+
+def test_check_cards_carry_a_status_tag():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert 'class="tag pass"' in html
+    assert 'class="tag fail"' in html
+
+
+def test_number_columns_are_marked_for_alignment():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert 'class="n"' in html
+
+
+def test_health_rows_use_header_cells_for_their_labels():
+    """A data table's row labels are headers; screen readers announce them."""
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert '<th scope="row">Cash</th>' in html
+    assert 'scope="col"' in html
+
+
+def test_the_health_table_can_scroll_on_a_narrow_screen():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert 'class="table-scroll"' in html
+
+
+def test_the_verified_badge_is_visible_on_a_quote():
+    r = _computed_only_report()
+    r["narrative"] = {
+        "verdict": "WATCH-CASE", "grounding_rate": 1.0, "hype_vs_reality": "h",
+        "reasoning": "r", "strategy": "s",
+        "risks": [{"risk": "R", "quote": "Q", "sell_trigger": "T",
+                   "quote_verified": True}],
+    }
+    html = render_report_fragment(r, pending=False)
+    assert 'class="verified"' in html
+    assert "Quote verified against filing" in html
+    assert "<blockquote>" in html
+
+
+def test_an_unverified_quote_is_marked_differently():
+    r = _computed_only_report()
+    r["narrative"] = {
+        "verdict": "WATCH-CASE", "grounding_rate": 0.0, "hype_vs_reality": "h",
+        "reasoning": "r", "strategy": "s",
+        "risks": [{"risk": "R", "quote": "Q", "sell_trigger": "T",
+                   "quote_verified": False}],
+    }
+    html = render_report_fragment(r, pending=False)
+    assert 'class="unverified"' in html
+    assert "Quote not found in filing" in html
+
+
+def test_the_report_has_a_sticky_bar_with_a_theme_toggle():
+    r = _computed_only_report()
+    r["narrative"] = {"verdict": "BUY-CASE", "grounding_rate": 1.0,
+                      "hype_vs_reality": "h", "risks": [], "reasoning": "r",
+                      "strategy": "s"}
+    html = render_report(r)
+    assert 'class="topbar"' in html
+    assert 'id="theme"' in html
+    assert "moat.theme" in html
+
+
+def test_the_theme_choice_is_remembered():
+    r = _computed_only_report()
+    r["narrative"] = {"verdict": "BUY-CASE", "grounding_rate": 1.0,
+                      "hype_vs_reality": "h", "risks": [], "reasoning": "r",
+                      "strategy": "s"}
+    html = render_report(r)
+    assert "localStorage" in html
+    assert "catch (err)" in html, "private mode must not break the page"

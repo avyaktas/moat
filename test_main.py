@@ -1563,3 +1563,24 @@ def test_report_uses_the_committed_company_after_ingest(client, monkeypatch):
         assert report.company_id == company.id
     finally:
         db.close()
+
+
+def test_etag_changes_when_the_template_changes(client, monkeypatch):
+    """The same data rendered by a different template is a different response.
+
+    Without this the browser keeps serving the old markup from its own cache
+    after a redesign ships - observed while rebuilding the report layout: the
+    server had changed and the page had not.
+    """
+    import main as main_module
+
+    first = _cacheable_report(client, monkeypatch).headers["ETag"]
+    monkeypatch.setattr(main_module, "RENDER_VERSION", "999")
+    second = client.get("/company/MSFT/report").headers["ETag"]
+    assert first != second
+
+
+def test_etag_is_still_stable_for_the_same_template(client, monkeypatch):
+    first = _cacheable_report(client, monkeypatch).headers["ETag"]
+    second = client.get("/company/MSFT/report").headers["ETag"]
+    assert first == second

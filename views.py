@@ -220,6 +220,11 @@ def _document(title: str, body: str, css: str = "") -> str:
 
 # ---------------------------------------------------------------- formatting
 
+# Unknown renders as an em-dash, never as a zero or a blank. The distinction
+# is load-bearing everywhere else in this codebase and it does not get to
+# stop mattering at the last step.
+EM_DASH = "\u2014"
+
 
 def money(v: float | None) -> str:
     """Large dollar figures at human scale: $318.3B, $46.2M, -$1.2B."""
@@ -261,74 +266,130 @@ def esc(s) -> str:
 
 # ---------------------------------------------------------------- components
 
-
-# An unrecognised status renders as "unknown" rather than raising. Indexing a
-# literal dict with c["status"] meant a new status value anywhere upstream
-# took down the whole tearsheet with a KeyError.
-_STATE_CLASS = {"PASS": "hold", "FAIL": "breach", "UNKNOWN": "unknown"}
+_STATE_CLASS = {"PASS": "pass", "FAIL": "fail", "UNKNOWN": "unknown"}
 
 
 def _state_of(check: dict) -> str:
+    """An unrecognised status renders as "unknown" rather than raising.
+
+    Indexing a literal dict with check["status"] meant a new status value
+    anywhere upstream took down the whole tearsheet with a KeyError.
+    """
     return _STATE_CLASS.get(check.get("status"), "unknown")
 
 
-def _wall(checks: list[dict]) -> str:
-    """The signature element: the scorecard as a wall.
+def _signed(value, formatter) -> str:
+    """Format a number, colouring it by direction.
 
-    Six blocks, one per check. Solid where the business holds, breached
-    where it fails, hatched where the data won't say. Readable before a
-    single word of the report.
+    Red and green mean up and down here, nothing else. A missing value is not
+    a direction, so it takes neither - the formatter renders it as an em-dash
+    and it stays the colour of ordinary text.
     """
-    blocks = []
-    for c in checks:
-        state = _state_of(c)
-        blocks.append(
-            f'<div class="block {state}" title="{esc(c["name"])}: {esc(c["detail"])}">'
-            f'<span class="block-label">{esc(c["name"])}</span></div>'
-        )
-    return f'<div class="wall">{"".join(blocks)}</div>'
+    if value is None:
+        return formatter(None)
+    number = float(value)
+    text = formatter(number)
+    if number > 0:
+        return f'<span class="pos">{text}</span>'
+    if number < 0:
+        return f'<span class="neg">{text}</span>'
+    return text
+
+
+def _meter(checks: list[dict], summary: dict) -> str:
+    """The scorecard as one line: a segment per criterion, filled where it holds.
+
+    The signature element, kept but slimmed. It used to be six large blocks
+    occupying the fold; the information in it is a count and a pattern, and a
+    single row of segments carries both without pushing the actual figures
+    below the screen.
+    """
+    segments = "".join(
+        f'<span class="seg {_state_of(c)}" title="{esc(c.get("name"))}: '
+        f'{esc(c.get("detail"))}"></span>'
+        for c in checks
+    )
+    passed = summary.get("passed", 0)
+    evaluable = summary.get("evaluable", 0)
+    unknown = summary.get("unknown", 0)
+    caption = f"{passed} of {evaluable} criteria hold"
+    if unknown:
+        caption += f" &middot; {unknown} unevaluable"
+    return (
+        f'<div class="meter" role="img" aria-label="{esc(caption)}">{segments}</div>'
+        f'<p class="meter-caption">{caption}</p>'
+    )
 
 
 def _checks_table(checks: list[dict]) -> str:
-    rows = []
+    """The scorecard as a grid of cards, one per criterion.
+
+    A table made every row look equally important and buried the verdict in
+    the left column. Cards put the outcome first, at a glance, with the
+    arithmetic underneath for anyone who wants to check it.
+    """
+    cards = []
     for c in checks:
         state = _state_of(c)
-        rows.append(
-            f'<tr class="{state}">'
-            f'<td class="check-mark"></td>'
-            f'<td class="check-name">{esc(c["name"])}</td>'
-            f'<td class="check-detail">{esc(c["detail"])}</td>'
-            f"</tr>"
+        label = {"pass": "Pass", "fail": "Fail"}.get(state, "Unknown")
+        cards.append(
+            f'<div class="check {state}">'
+            f'<div class="check-top">'
+            f'<span class="check-name">{esc(c.get("name"))}</span>'
+            f'<span class="tag {state}">{label}</span>'
+            f"</div>"
+            f'<p class="check-detail">{esc(c.get("detail"))}</p>'
+            f"</div>"
         )
-    return f'<table class="checks">{"".join(rows)}</table>'
+    return f'<div class="checks">{"".join(cards)}</div>'
 
 
 def _figures(ttm: dict, valuation: dict, price: dict | None) -> str:
+    """The headline numbers, as a grid of tiles.
+
+    Every value is tabular so the column of figures reads as a column rather
+    than as ragged text, and growth is signed because a negative one means
+    something different from a small one.
+    """
+    share_price = None
+    if price and price.get("price") is not None:
+        share_price = float(price["price"])
+
     items = [
-        ("Revenue (TTM)", money(ttm.get("revenue"))),
-        ("Net income (TTM)", money(ttm.get("net_income"))),
-        ("Free cash flow (TTM)", money(ttm.get("free_cash_flow"))),
-        ("Net margin", pct(ttm.get("net_margin"))),
-        ("FCF margin", pct(ttm.get("fcf_margin"))),
-        ("Revenue growth", pct(ttm.get("revenue_growth"))),
-        ("ROIC", pct(ttm.get("roic"))),
-        ("ROE", pct(ttm.get("roe"))),
-        ("Market cap", money(valuation.get("market_cap"))),
-        ("P / FCF", mult(valuation.get("p_fcf"))),
-        ("P / E", mult(valuation.get("p_e"))),
+        ("Revenue (TTM)", money(ttm.get("revenue")), None),
+        ("Net income (TTM)", money(ttm.get("net_income")), None),
+        ("Free cash flow (TTM)", money(ttm.get("free_cash_flow")), None),
+        ("Net margin", pct(ttm.get("net_margin")), None),
+        ("FCF margin", pct(ttm.get("fcf_margin")), None),
+        ("Revenue growth", None, ("signed", ttm.get("revenue_growth"), pct)),
+        ("ROIC", pct(ttm.get("roic")), None),
+        ("ROE", pct(ttm.get("roe")), None),
+        ("Market cap", money(valuation.get("market_cap")), None),
+        ("P / FCF", mult(valuation.get("p_fcf")), None),
+        ("P / E", mult(valuation.get("p_e")), None),
         ("Share price",
-         f"${float(price['price']):,.2f}"
-         if price and price.get("price") is not None else "—"),
+         f"${share_price:,.2f}" if share_price is not None else EM_DASH, None),
     ]
-    cells = "".join(
-        f'<div class="fig"><span class="fig-label">{esc(k)}</span>'
-        f'<span class="fig-value">{esc(v)}</span></div>'
-        for k, v in items
-    )
-    return f'<div class="figures">{cells}</div>'
+
+    cells = []
+    for label, value, signed in items:
+        rendered = _signed(signed[1], signed[2]) if signed else value
+        cells.append(
+            f'<div class="fig">'
+            f'<span class="fig-label">{esc(label)}</span>'
+            f'<span class="fig-value num">{rendered}</span>'
+            f"</div>"
+        )
+    return f'<div class="figures">{"".join(cells)}</div>'
 
 
 def _health(health: dict) -> str:
+    """Prior quarter against the latest, for the four survival metrics.
+
+    Direction matters more than level, so the change column is signed and
+    coloured while the levels stay neutral - otherwise every row is green and
+    the one that moved the wrong way does not stand out.
+    """
     labels = {
         "cash": "Cash",
         "short_term_investments": "Short-term investments",
@@ -344,41 +405,47 @@ def _health(health: dict) -> str:
         # json.dumps(default=str) serializer stores numbers as strings, and
         # "1234" > 0 raises TypeError.
         change = float(change) if change is not None else None
-        # A change of exactly zero is a fact - the balance did not move - and
-        # must not render as the em-dash that means "we do not know". money()
-        # already maps None to the em-dash, so passing change straight through
-        # keeps the two cases distinct. Zero gets no up/down colour because it
-        # went in neither direction.
-        direction = ""
-        if change:
-            direction = "up" if change > 0 else "down"
         rows.append(
             f"<tr>"
-            f"<td>{esc(label)}</td>"
+            f'<th scope="row">{esc(label)}</th>'
             f'<td class="n">{money(row.get("prior"))}</td>'
             f'<td class="n">{money(row.get("current"))}</td>'
-            f'<td class="n {direction}">{money(change)}</td>'
+            f'<td class="n">{_signed(change, money)}</td>'
             f"</tr>"
         )
     surv = health.get("survivability", {})
+    verdict = surv.get("verdict", "")
     return f"""
-      <table class="health">
-        <thead><tr><th></th><th class="n">Prior qtr</th>
-        <th class="n">Latest qtr</th><th class="n">Change</th></tr></thead>
-        <tbody>{"".join(rows)}</tbody>
-      </table>
-      <p class="survivability">{esc(surv.get("verdict", ""))}</p>
+      <div class="table-scroll">
+        <table class="health">
+          <thead><tr><th scope="col"></th><th scope="col" class="n">Prior qtr</th>
+          <th scope="col" class="n">Latest qtr</th>
+          <th scope="col" class="n">Change</th></tr></thead>
+          <tbody>{"".join(rows)}</tbody>
+        </table>
+      </div>
+      <p class="survivability">{esc(verdict)}</p>
     """
 
 
 def _risks(risks: list[dict]) -> str:
+    """Each risk, its supporting passage, and what would make you sell.
+
+    The verification badge sits with the quote rather than below it, because
+    it is a statement about that passage: this text was found, character for
+    character, in the filing.
+    """
     if not risks:
         return '<p class="empty">No risk analysis available for this filing.</p>'
     out = []
     for r in risks:
         verified = r.get("quote_verified")
-        mark = (
-            '<span class="verified">Quote verified against filing</span>'
+        badge = (
+            '<span class="verified">'
+            '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" '
+            'aria-hidden="true"><path d="M2.5 6.2l2.4 2.4 4.6-5" '
+            'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
+            'stroke-linejoin="round"/></svg>Quote verified against filing</span>'
             if verified
             else '<span class="unverified">Quote not found in filing</span>'
         )
@@ -387,9 +454,11 @@ def _risks(risks: list[dict]) -> str:
             <article class="risk">
               <h3>{esc(r.get("risk"))}</h3>
               <blockquote>{esc(r.get("quote"))}</blockquote>
-              {mark}
-              <p class="trigger"><span class="trigger-label">What would make you sell</span>
-                 {esc(r.get("sell_trigger"))}</p>
+              {badge}
+              <div class="trigger">
+                <span class="trigger-label">What would make you sell</span>
+                <p>{esc(r.get("sell_trigger"))}</p>
+              </div>
             </article>
             """
         )
@@ -411,8 +480,8 @@ def _timestamp(value: str | None) -> str:
     text = str(value)
     stamp = esc(text[:19].replace("T", " "))
     if text.endswith("+00:00") or text.endswith("Z"):
-        return f"{stamp} UTC."
-    return f"{stamp}."
+        return f"{stamp} UTC"
+    return stamp
 
 
 def _paragraphs(text: str | None) -> str:
@@ -429,260 +498,258 @@ def _paragraphs(text: str | None) -> str:
 # passed to _document() rather than interpolated into an f-string, so the
 # braces no longer have to be doubled - which is what made this block
 # awkward to edit and easy to break.
-_REPORT_CSS = """  .sheet { max-width: 62rem; margin: 0 auto; padding: 4rem 2rem 6rem; }
+_REPORT_CSS = """
+  /* ---- sticky bar ---- */
+  .topbar {
+    position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: saturate(1.6) blur(10px);
+    border-bottom: 1px solid transparent;
+    transition: border-color 160ms ease;
+  }
+  .topbar.scrolled { border-bottom-color: var(--border); }
+  .topbar-inner {
+    max-width: var(--maxw); margin: 0 auto;
+    padding: 0 var(--s5); height: 52px;
+    display: flex; align-items: center; gap: var(--s3);
+  }
+  .home {
+    display: flex; align-items: center; gap: var(--s2);
+    text-decoration: none; font-weight: 600; font-size: 0.92rem;
+    letter-spacing: -0.01em; color: var(--text);
+  }
+  .mark {
+    width: 20px; height: 20px; border-radius: 6px; flex: none;
+    background: var(--text); position: relative;
+  }
+  .mark::after {
+    content: ''; position: absolute; inset: 6px 6px auto 6px; height: 2px;
+    background: var(--bg); border-radius: 1px; box-shadow: 0 4px 0 var(--bg);
+  }
+  /* Context appears only once the hero has scrolled away. */
+  .topbar-ctx {
+    display: flex; align-items: center; gap: var(--s3);
+    margin-left: var(--s3); opacity: 0; transform: translateY(-2px);
+    transition: opacity 160ms ease, transform 160ms ease;
+    pointer-events: none;
+  }
+  .topbar.scrolled .topbar-ctx { opacity: 1; transform: none; }
+  .topbar-ticker { font-weight: 600; letter-spacing: -0.01em; }
+  .topbar-sep { color: var(--text-subtle); }
+  .topbar-right { margin-left: auto; display: flex; align-items: center;
+                  gap: var(--s3); }
 
-  /* ---- masthead ---- */
-  .masthead {
-    display: flex; align-items: flex-end; justify-content: space-between;
-    gap: 2rem; flex-wrap: wrap;
-    padding-bottom: 1.25rem; border-bottom: 1px solid var(--ink);
+  .theme-toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; padding: 0; cursor: pointer;
+    color: var(--text-muted); background: transparent;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    transition: color 140ms ease, border-color 140ms ease;
   }
-  .eyebrow {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--ink-soft); margin-bottom: 0.5rem;
-  }
-  .eyebrow a { text-decoration: none; border-bottom: 1px solid var(--rule);
-                padding-bottom: 1px; }
-  .eyebrow a:hover { border-color: var(--ink-soft); color: var(--ink); }
-  .ticker {
-    font-family: 'Instrument Serif', Georgia, serif;
-    font-size: clamp(3rem, 9vw, 5.5rem); line-height: 0.9;
-    letter-spacing: -0.01em; margin: 0;
-  }
-  .company-name {
-    font-size: 0.95rem; color: var(--ink-soft); margin: 0.6rem 0 0;
-  }
-  .verdict {
-    font-family: 'Instrument Serif', Georgia, serif;
-    font-size: clamp(1.5rem, 4vw, 2.25rem); line-height: 1;
-    padding: 0.5rem 0 0.5rem 1.25rem; border-left: 3px solid currentColor;
-  }
-  .verdict.buy    { color: var(--hold); }
-  .verdict.watch  { color: var(--ink); }
-  .verdict.avoid  { color: var(--breach); }
-  .verdict small {
-    display: block; font-family: 'JetBrains Mono', monospace;
-    font-size: 0.65rem; letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--ink-soft); margin-bottom: 0.35rem;
+  .theme-toggle:hover { color: var(--text); border-color: var(--border-strong); }
+  .theme-toggle .moon { display: none; }
+  :root[data-theme="dark"] .theme-toggle .moon,
+  :root:not([data-theme="light"]) .theme-toggle .moon { display: block; }
+  :root[data-theme="dark"] .theme-toggle .sun,
+  :root:not([data-theme="light"]) .theme-toggle .sun { display: none; }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) .theme-toggle .moon { display: none; }
+    :root:not([data-theme="dark"]) .theme-toggle .sun { display: block; }
   }
 
-  /* ---- the wall: signature element ---- */
-  .wall {
-    display: grid; grid-template-columns: repeat(6, 1fr);
-    gap: 4px; margin: 2.5rem 0 0.75rem; height: 7rem;
+  /* ---- page ---- */
+  .sheet { max-width: var(--maxw); margin: 0 auto;
+           padding: var(--s6) var(--s5) var(--s8); }
+
+  /* ---- hero ---- */
+  .hero {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: var(--s5); flex-wrap: wrap; margin-bottom: var(--s6);
   }
-  .block {
-    position: relative; border: 1.5px solid var(--ink);
-    display: flex; align-items: flex-end;
+  .hero h1 {
+    font-size: clamp(2rem, 4.5vw, 2.75rem); line-height: 1.05;
+    letter-spacing: -0.035em; font-weight: 650; margin: 0;
   }
-  .block.hold    { background: var(--ink); }
-  .block.breach  { background: transparent; border-color: var(--breach); }
-  .block.unknown {
-    border-color: var(--unknown);
-    background: repeating-linear-gradient(45deg,
-      transparent, transparent 5px, var(--rule) 5px, var(--rule) 6px);
+  .hero-sub {
+    margin: var(--s2) 0 0; color: var(--text-muted); font-size: 0.92rem;
   }
-  .block-label {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.6rem; letter-spacing: 0.08em; text-transform: uppercase;
-    padding: 0.5rem; line-height: 1.2;
+  .hero-sub .dot { color: var(--text-subtle); margin: 0 var(--s2); }
+  .hero-right { text-align: right; display: flex; flex-direction: column;
+                align-items: flex-end; gap: var(--s3); }
+  .price { font-size: 1.6rem; font-weight: 600; letter-spacing: -0.02em;
+           line-height: 1; }
+  .price-label { display: block; font-size: 0.72rem; font-weight: 500;
+                 letter-spacing: 0.06em; text-transform: uppercase;
+                 color: var(--text-subtle); margin-bottom: var(--s1); }
+
+  /* ---- verdict badge ---- */
+  .badge {
+    display: inline-flex; align-items: center; gap: var(--s2);
+    font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em;
+    padding: 5px var(--s3); border-radius: 999px;
+    border: 1px solid transparent; white-space: nowrap;
   }
-  .block.hold .block-label   { color: var(--paper); }
-  .block.breach .block-label { color: var(--breach); }
-  .wall-caption {
-    font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
-    letter-spacing: 0.08em; color: var(--ink-soft); text-transform: uppercase;
+  .badge::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor;
+  }
+  .badge.buy    { color: var(--pos);  background: var(--pos-soft);
+                  border-color: color-mix(in srgb, var(--pos) 26%, transparent); }
+  .badge.watch  { color: var(--warn); background: var(--warn-soft);
+                  border-color: color-mix(in srgb, var(--warn) 26%, transparent); }
+  .badge.avoid  { color: var(--neg);  background: var(--neg-soft);
+                  border-color: color-mix(in srgb, var(--neg) 26%, transparent); }
+  .badge.none   { color: var(--text-muted); background: var(--surface-2);
+                  border-color: var(--border); }
+
+  /* ---- criteria meter ---- */
+  .meter {
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px;
+    height: 6px; margin: 0 0 var(--s3);
+  }
+  .seg { border-radius: 2px; background: var(--border); }
+  .seg.pass { background: var(--pos); }
+  .seg.fail { background: var(--neg); }
+  .seg.unknown {
+    background: repeating-linear-gradient(45deg, var(--border),
+      var(--border) 3px, transparent 3px, transparent 6px);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+  .meter-caption {
+    margin: 0 0 var(--s7); font-size: 0.85rem; color: var(--text-muted);
   }
 
   /* ---- sections ---- */
-  section { margin-top: 3.5rem; }
+  section { margin-top: var(--s7); }
+  section:first-of-type { margin-top: 0; }
   h2 {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.72rem; letter-spacing: 0.16em; text-transform: uppercase;
-    font-weight: 500; color: var(--ink-soft);
-    padding-bottom: 0.6rem; border-bottom: 1px solid var(--rule);
-    margin: 0 0 1.5rem;
+    font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-subtle);
+    margin: 0 0 var(--s4);
   }
 
-  /* ---- checks ---- */
-  table.checks { width: 100%; border-collapse: collapse; }
-  table.checks td { padding: 0.7rem 0; border-bottom: 1px solid var(--rule);
-                     vertical-align: baseline; }
-  .check-mark { width: 1.5rem; }
-  .check-mark::before {
-    content: ''; display: block; width: 9px; height: 9px; border: 1.5px solid;
+  /* ---- scorecard grid ---- */
+  .checks {
+    display: grid; gap: var(--s3);
+    grid-template-columns: repeat(auto-fit, minmax(248px, 1fr));
   }
-  tr.hold    .check-mark::before { background: var(--hold); border-color: var(--hold); }
-  tr.breach  .check-mark::before { background: transparent; border-color: var(--breach); }
-  tr.unknown .check-mark::before { background: var(--rule); border-color: var(--unknown); }
-  .check-name { width: 12rem; font-weight: 500; }
-  .check-detail { font-family: 'JetBrains Mono', monospace; font-size: 0.82rem;
-                   color: var(--ink-soft); }
-  tr.breach .check-detail { color: var(--breach); }
+  .check {
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--surface); padding: var(--s4);
+  }
+  .check-top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--s2); margin-bottom: var(--s2);
+  }
+  .check-name { font-weight: 550; font-size: 0.95rem; }
+  .check-detail {
+    margin: 0; font-size: 0.83rem; color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .tag {
+    font-size: 0.68rem; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 999px;
+  }
+  .tag.pass    { color: var(--pos); background: var(--pos-soft); }
+  .tag.fail    { color: var(--neg); background: var(--neg-soft); }
+  .tag.unknown { color: var(--text-subtle); background: var(--surface-2); }
 
   /* ---- figures ---- */
   .figures {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-    gap: 1px; background: var(--rule); border: 1px solid var(--rule);
+    display: grid; gap: var(--s3);
+    grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
   }
-  .fig { background: var(--paper); padding: 1rem 1.1rem;
-          transition: background 150ms ease; }
-  .fig:hover { background: #FCFBF7; }
+  .fig {
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--surface); padding: var(--s4);
+  }
   .fig-label {
-    display: block; font-size: 0.72rem; color: var(--ink-soft);
-    margin-bottom: 0.35rem;
+    display: block; font-size: 0.78rem; color: var(--text-muted);
+    margin-bottom: var(--s1);
   }
   .fig-value {
-    display: block; font-family: 'JetBrains Mono', monospace;
-    font-size: 1.15rem; font-variant-numeric: tabular-nums;
+    display: block; font-size: 1.25rem; font-weight: 600;
+    letter-spacing: -0.015em;
   }
 
-  /* ---- health ---- */
-  table.health { width: 100%; border-collapse: collapse;
-                  font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
-  table.health th {
-    font-family: 'Inter', sans-serif; font-size: 0.72rem; font-weight: 500;
-    color: var(--ink-soft); text-align: left; padding-bottom: 0.6rem;
-    border-bottom: 1px solid var(--ink);
+  /* ---- financial health ---- */
+  .table-scroll { overflow-x: auto; }
+  table.health { width: 100%; border-collapse: collapse; font-size: 0.9rem;
+                 min-width: 520px; }
+  table.health th[scope="col"] {
+    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--text-subtle); text-align: left;
+    padding: 0 0 var(--s2); border-bottom: 1px solid var(--border);
   }
-  table.health td { padding: 0.6rem 0; border-bottom: 1px solid var(--rule); }
-  table.health td:first-child { font-family: 'Inter', sans-serif; }
-  .n { text-align: right; font-variant-numeric: tabular-nums; }
-  .up   { color: var(--hold); }
-  .down { color: var(--breach); }
+  table.health th[scope="row"] {
+    font-weight: 450; text-align: left; color: var(--text);
+  }
+  table.health td, table.health th[scope="row"] {
+    padding: var(--s3) 0; border-bottom: 1px solid var(--border);
+  }
+  table.health tbody tr:last-child td,
+  table.health tbody tr:last-child th { border-bottom: none; }
+  .n { text-align: right; }
+  table.health td.n { padding-left: var(--s4); }
   .survivability {
-    margin-top: 1rem; font-size: 0.9rem; color: var(--ink-soft);
-    padding-left: 1rem; border-left: 2px solid var(--rule);
+    margin: var(--s4) 0 0; font-size: 0.88rem; color: var(--text-muted);
+    padding: var(--s3) var(--s4); background: var(--surface-2);
+    border-radius: var(--radius); border: 1px solid var(--border);
   }
 
   /* ---- prose ---- */
-  .prose { max-width: var(--measure); }
-  .prose p { margin: 0 0 1.15rem; }
+  .prose { max-width: var(--measure); font-size: 0.97rem; }
+  .prose p { margin: 0 0 var(--s4); color: var(--text); }
+  .prose p:last-child { margin-bottom: 0; }
   .lede { font-size: 1.05rem; }
 
   /* ---- risks ---- */
-  .risk { padding: 1.75rem 0; border-bottom: 1px solid var(--rule); }
-  .risk:first-of-type { padding-top: 0; }
-  .risk h3 { font-size: 1rem; font-weight: 600; margin: 0 0 0.9rem;
-              max-width: var(--measure); }
+  .risk {
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    background: var(--surface); padding: var(--s5); margin-bottom: var(--s3);
+  }
+  .risk:last-child { margin-bottom: 0; }
+  .risk h3 {
+    font-size: 1rem; font-weight: 600; line-height: 1.4; margin: 0 0 var(--s4);
+    max-width: var(--measure); letter-spacing: -0.01em;
+  }
   .risk blockquote {
-    margin: 0 0 0.5rem; padding-left: 1.1rem;
-    border-left: 2px solid var(--ink); font-size: 0.92rem;
-    color: var(--ink-soft); max-width: var(--measure);
+    margin: 0; padding: var(--s4); background: var(--surface-2);
+    border-radius: var(--radius); border-left: 2px solid var(--border-strong);
+    font-size: 0.92rem; color: var(--text-muted); max-width: var(--measure);
   }
   .verified, .unverified {
-    font-family: 'JetBrains Mono', monospace; font-size: 0.65rem;
-    letter-spacing: 0.1em; text-transform: uppercase;
+    display: inline-flex; align-items: center; gap: 5px;
+    margin-top: var(--s3); font-size: 0.72rem; font-weight: 600;
+    letter-spacing: 0.02em; padding: 3px 9px; border-radius: 999px;
   }
-  .verified   { color: var(--hold); }
-  .unverified { color: var(--breach); }
-  .trigger { margin: 1rem 0 0; font-size: 0.92rem; max-width: var(--measure); }
+  .verified   { color: var(--pos); background: var(--pos-soft); }
+  .unverified { color: var(--neg); background: var(--neg-soft); }
+  .trigger { margin-top: var(--s4); max-width: var(--measure); }
   .trigger-label {
-    display: block; font-family: 'JetBrains Mono', monospace;
-    font-size: 0.65rem; letter-spacing: 0.1em; text-transform: uppercase;
-    color: var(--ink-soft); margin-bottom: 0.3rem;
+    display: block; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--text-subtle); margin-bottom: var(--s1);
   }
+  .trigger p { margin: 0; font-size: 0.92rem; }
+  .empty { color: var(--text-muted); font-size: 0.92rem; margin: 0; }
 
   /* ---- footer ---- */
   footer {
-    margin-top: 4rem; padding-top: 1.25rem; border-top: 1px solid var(--ink);
-    font-size: 0.78rem; color: var(--ink-soft);
+    margin-top: var(--s8); padding-top: var(--s5);
+    border-top: 1px solid var(--border);
+    font-size: 0.82rem; color: var(--text-subtle);
   }
-  footer a { color: var(--ink-soft); text-decoration: none;
-              border-bottom: 1px solid var(--rule); }
-  footer a:hover { color: var(--ink); border-color: var(--ink-soft); }
-  footer p { margin: 0.3rem 0; }
-  .disclaimer { margin-top: 1.25rem; font-style: italic; }
+  footer p { margin: var(--s1) 0; }
+  footer a { color: var(--text-muted); }
+  .disclaimer { margin-top: var(--s4); max-width: var(--measure); }
 
-  @media (max-width: 40rem) {
-    .sheet { padding: 2.5rem 1.25rem 4rem; }
-    .wall { height: 5rem; }
-    .block-label { font-size: 0.5rem; padding: 0.3rem; }
-    .check-name { width: auto; }
+  @media (max-width: 720px) {
+    .sheet { padding: var(--s5) var(--s4) var(--s7); }
+    .topbar-inner { padding: 0 var(--s4); }
+    .hero { gap: var(--s4); }
+    .hero-right { align-items: flex-start; text-align: left; }
+    .topbar-ctx { display: none; }
   }
-  @media (prefers-reduced-motion: no-preference) {
-    .block { transition: background 200ms ease; }
-  }
-
-
-  /* ---- progress, while the report is being built ---- */
-  .progress {
-    list-style: none; margin: 2.5rem 0 0; padding: 0;
-    font-family: 'JetBrains Mono', monospace; font-size: 0.8rem;
-  }
-  .progress li {
-    display: flex; align-items: baseline; gap: 0.75rem;
-    padding: 0.55rem 0; border-bottom: 1px solid var(--rule);
-    color: var(--unknown); transition: color 200ms ease;
-  }
-  .progress .mark {
-    width: 0.9rem; height: 0.9rem; flex: none; border: 1.5px solid currentColor;
-    align-self: center;
-  }
-  .progress .took { margin-left: auto; font-size: 0.72rem; opacity: 0.75; }
-  .progress li[data-state="running"] { color: var(--ink); }
-  .progress li[data-state="running"] .mark {
-    background: var(--ink); border-color: var(--ink);
-    animation: moat-pulse 1.1s ease-in-out infinite;
-  }
-  .progress li[data-state="done"] { color: var(--hold); }
-  .progress li[data-state="done"] .mark {
-    background: var(--hold); border-color: var(--hold);
-  }
-  .progress li[data-state="skipped"] { color: var(--unknown); }
-  .progress li[data-state="skipped"] .mark {
-    background: repeating-linear-gradient(45deg, transparent, transparent 3px,
-      var(--rule) 3px, var(--rule) 4px);
-  }
-  .progress li[data-state="failed"] { color: var(--breach); }
-  .progress li[data-state="failed"] .mark {
-    background: transparent; border-color: var(--breach);
-  }
-
-  @keyframes moat-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
-  @media (prefers-reduced-motion: reduce) {
-    .progress li[data-state="running"] .mark { animation: none; }
-    .skeleton::after { animation: none; }
-  }
-
-  /* ---- a narrative section the model has not finished ---- */
-  .pending {
-    display: flex; align-items: center; gap: 0.6rem; margin: 0;
-    font-family: 'JetBrains Mono', monospace; font-size: 0.78rem;
-    letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft);
-  }
-  .pending-dot {
-    width: 7px; height: 7px; background: var(--ink-soft); flex: none;
-    animation: moat-pulse 1.1s ease-in-out infinite;
-  }
-  .verdict.none small { color: var(--ink-soft); }
-
-  /* ---- the skeleton shown before any figures exist ---- */
-  .skeleton {
-    position: relative; overflow: hidden;
-    background: var(--rule); height: 7rem; margin: 2.5rem 0 0.75rem;
-  }
-  .skeleton::after {
-    content: ''; position: absolute; inset: 0;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.45),
-      transparent);
-    animation: moat-sweep 1.6s ease-in-out infinite;
-  }
-  @keyframes moat-sweep { 0% { transform: translateX(-100%); }
-                          100% { transform: translateX(100%); } }
-
-  /* ---- failure ---- */
-  .failure {
-    margin: 2.5rem 0 0; padding: 1.25rem 1.4rem;
-    border-left: 3px solid var(--breach); background: rgba(180, 70, 47, 0.06);
-  }
-  .failure h2 {
-    border: none; padding: 0; margin: 0 0 0.5rem; color: var(--breach);
-    font-size: 0.75rem;
-  }
-  .failure p { margin: 0; font-size: 0.95rem; }
-  .failure a { color: var(--ink); }
 """
 
 
@@ -691,6 +758,48 @@ def _pending(label: str) -> str:
     return (
         f'<p class="pending"><span class="pending-dot"></span>{esc(label)}</p>'
     )
+
+
+VERDICT_CLASS = {"BUY-CASE": "buy", "WATCH-CASE": "watch", "AVOID-CASE": "avoid"}
+
+
+def _theme_toggle() -> str:
+    """A light/dark switch, drawn as two icons with one shown at a time."""
+    return """
+      <button class="theme-toggle" id="theme" type="button"
+              aria-label="Switch between light and dark">
+        <svg class="sun" width="15" height="15" viewBox="0 0 16 16" fill="none"
+             aria-hidden="true">
+          <circle cx="8" cy="8" r="3.1" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M8 1v1.6M8 13.4V15M15 8h-1.6M2.6 8H1M12.9 3.1l-1.1 1.1M4.2 11.8l-1.1 1.1M12.9 12.9l-1.1-1.1M4.2 4.2L3.1 3.1"
+                stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <svg class="moon" width="15" height="15" viewBox="0 0 16 16" fill="none"
+             aria-hidden="true">
+          <path d="M13.5 9.6A5.8 5.8 0 016.4 2.5a5.8 5.8 0 107.1 7.1z"
+                stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    """
+
+
+def _topbar(ticker: str, name: str, verdict: str, verdict_class: str) -> str:
+    """The persistent bar: home, and - once scrolled - which report this is."""
+    return f"""
+    <div class="topbar" id="topbar">
+      <div class="topbar-inner">
+        <a class="home" href="/">
+          <span class="mark" aria-hidden="true"></span>Moat
+        </a>
+        <div class="topbar-ctx" aria-hidden="true">
+          <span class="topbar-sep">/</span>
+          <span class="topbar-ticker">{esc(ticker)}</span>
+          <span class="badge {verdict_class}">{esc(verdict)}</span>
+        </div>
+        <div class="topbar-right">{_theme_toggle()}</div>
+      </div>
+    </div>
+    """
 
 
 def _report_sheet(report: dict, pending: bool = False) -> str:
@@ -711,16 +820,13 @@ def _report_sheet(report: dict, pending: bool = False) -> str:
     narrative = report.get("narrative") or {}
     sources = report.get("sources", {})
     cache = report.get("cache", {})
+    price = data.get("price")
 
     verdict = narrative.get("verdict", "PENDING" if pending else "NO VERDICT")
-    verdict_class = {
-        "BUY-CASE": "buy",
-        "WATCH-CASE": "watch",
-        "AVOID-CASE": "avoid",
-    }.get(verdict, "none")
+    verdict_class = VERDICT_CLASS.get(verdict, "none")
 
     grounding = narrative.get("grounding_rate")
-    grounding_str = f"{float(grounding) * 100:.0f}%" if grounding is not None else "—"
+    grounding_str = f"{float(grounding) * 100:.0f}%" if grounding is not None else EM_DASH
 
     # esc(None) is the empty string, so an absent filing URL produced
     # href="" - a link back to the current page, which reads as working and
@@ -734,30 +840,35 @@ def _report_sheet(report: dict, pending: bool = False) -> str:
     else:
         filing_line = "10-K unavailable"
 
+    share_price = None
+    if price and price.get("price") is not None:
+        share_price = f"${float(price['price']):,.2f}"
+
+    price_block = (
+        f'<div><span class="price-label">Share price</span>'
+        f'<span class="price num">{share_price}</span></div>'
+        if share_price else ""
+    )
+
     # id="sheet" on every rendering of the sheet, not just the shell's. The
     # page swaps this element out as each stage lands, so the anchor has to
     # survive the swap - without it the partial replaced the only element
     # carrying the id, and the done handler then had nothing to replace.
     body = f"""<div class="sheet" id="sheet">
 
-  <header class="masthead">
+  <header class="hero">
     <div>
-      <p class="eyebrow"><a href="/">Moat</a> · Filing analysis</p>
-      <h1 class="ticker">{esc(report.get("company"))}</h1>
-      <p class="company-name">{esc(report.get("name"))} &nbsp;·&nbsp;
+      <h1>{esc(report.get("company"))}</h1>
+      <p class="hero-sub">{esc(report.get("name"))}<span class="dot">&middot;</span>
          Data as of {esc(data.get("as_of"))}</p>
     </div>
-    <div class="verdict {verdict_class}">
-      <small>Framework verdict</small>
-      {esc(verdict)}
+    <div class="hero-right">
+      {price_block}
+      <span class="badge {verdict_class}">{esc(verdict)}</span>
     </div>
   </header>
 
-  {_wall(checks)}
-  <p class="wall-caption">
-    {summary.get("passed", 0)} of {summary.get("evaluable", 0)} criteria hold
-    {f'· {summary.get("unknown")} unevaluable' if summary.get("unknown") else ''}
-  </p>
+  {_meter(checks, summary)}
 
   <section>
     <h2>Scorecard</h2>
@@ -766,7 +877,7 @@ def _report_sheet(report: dict, pending: bool = False) -> str:
 
   <section>
     <h2>Figures</h2>
-    {_figures(ttm, scorecard.get("valuation", {}), data.get("price"))}
+    {_figures(ttm, scorecard.get("valuation", {}), price)}
   </section>
 
   <section>
@@ -802,7 +913,7 @@ def _report_sheet(report: dict, pending: bool = False) -> str:
     <p>Financials from {esc(sources.get("financials"))}.
        Price from {esc(sources.get("price"))}.</p>
     <p>Filing: {filing_line}{"" if pending else
-       f" · {grounding_str} of quotes verified against the source document."}</p>
+       f" &middot; {grounding_str} of quotes verified against the source document."}</p>
     <p>{"Cached" if cache.get("cached") else "Generated"}
        {_timestamp(cache.get("generated_at"))}</p>
     <p class="disclaimer">This is a screen against stated criteria, not
@@ -815,14 +926,61 @@ def _report_sheet(report: dict, pending: bool = False) -> str:
     return body
 
 
+# Shared by every page that has a sticky bar: remember the choice, apply it
+# before paint so there is no flash of the wrong theme, and keep following the
+# system until someone actually chooses.
+THEME_SCRIPT = """
+<script>
+(function () {
+  var KEY = 'moat.theme';
+  try {
+    var saved = localStorage.getItem(KEY);
+    if (saved) document.documentElement.setAttribute('data-theme', saved);
+  } catch (err) { /* private mode - fall back to the system preference */ }
+
+  function bind() {
+    var btn = document.getElementById('theme');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var root = document.documentElement;
+      var now = root.getAttribute('data-theme');
+      if (!now) {
+        now = window.matchMedia('(prefers-color-scheme: dark)').matches
+          ? 'dark' : 'light';
+      }
+      var next = now === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      try { localStorage.setItem(KEY, next); } catch (err) { /* ignore */ }
+    });
+  }
+
+  var bar = document.getElementById('topbar');
+  function onScroll() {
+    if (bar) bar.classList.toggle('scrolled', window.scrollY > 24);
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { bind(); onScroll(); });
+  } else { bind(); onScroll(); }
+})();
+</script>
+"""
+
+
 def render_report(report: dict) -> str:
     """The finished tearsheet, as a complete page."""
-    return _document(
-        f'{esc(report.get("company"))} \u00b7 Moat',
-        _report_sheet(report),
-        _REPORT_CSS,
+    narrative = report.get("narrative") or {}
+    verdict = narrative.get("verdict", "NO VERDICT")
+    body = (
+        _topbar(str(report.get("company") or ""), str(report.get("name") or ""),
+                verdict, VERDICT_CLASS.get(verdict, "none"))
+        + _report_sheet(report)
+        + THEME_SCRIPT
     )
-
+    return _document(
+        f'{esc(report.get("company"))} \u00b7 Moat', body, _REPORT_CSS
+    )
 
 
 # ---------------------------------------------------------------- landing page
