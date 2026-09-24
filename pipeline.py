@@ -104,3 +104,72 @@ def prefetch(ticker: str, *, need_financials: bool, fetch_financials,
         raise result.errors["financials"]
 
     return result
+
+
+# ----------------------------------------------------------------- events
+#
+# Building a report is a sequence of stages, and two callers want different
+# things from it. The JSON endpoint wants the finished payload and nothing
+# else. The streaming endpoint wants to say what is happening as it happens,
+# and to show the computed figures before the model has written a word.
+#
+# Rather than implement it twice - which would guarantee the two drift - the
+# build is a generator that yields these, and each caller keeps what it needs.
+
+
+@dataclass
+class Stage:
+    """Progress on one stage of the build."""
+
+    key: str
+    label: str
+    state: str                      # running | done | skipped | failed
+    seconds: float | None = None
+    detail: str | None = None
+
+    def as_dict(self) -> dict:
+        out = {"key": self.key, "label": self.label, "state": self.state}
+        if self.seconds is not None:
+            out["seconds"] = round(self.seconds, 2)
+        if self.detail:
+            out["detail"] = self.detail
+        return out
+
+
+@dataclass
+class Partial:
+    """Everything computed from filed data, before the model is consulted.
+
+    Emitted so the page can show the scorecard, the figures and the health
+    table at around two seconds rather than making the reader wait out the
+    thirty the narrative takes. These numbers are final - the model does not
+    revise them, it interprets them - so showing them early is honest.
+    """
+
+    payload: dict
+
+
+@dataclass
+class Result:
+    """The finished report."""
+
+    payload: dict
+
+
+@dataclass
+class Failure:
+    """The build cannot continue, with something a person can read."""
+
+    status: int
+    title: str
+    detail: str
+
+
+# The stages a reader sees, in order. Labels live here so the page and the
+# logs agree on what the application calls each step.
+STAGE_LABELS = {
+    "fetch": "Fetching SEC filings",
+    "store": "Storing financials",
+    "metrics": "Computing metrics",
+    "synthesis": "Writing analysis",
+}

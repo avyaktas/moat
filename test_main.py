@@ -1177,3 +1177,136 @@ def test_a_retry_that_succeeds_still_produces_a_report(client, monkeypatch):
     resp = client.get("/company/MSFT/report")
     assert resp.json()["narrative"]["verdict"] == "BUY-CASE"
     assert len(attempts) == 2
+
+
+# --- the build as a sequence of events ---
+#
+# One generator, two consumers: the JSON endpoint keeps only the Result, the
+# stream reports each stage as it lands. Implementing that twice would
+# guarantee the two drift.
+
+import pipeline as pipeline_module
+from main import _report_events, _synthesis_failure_detail
+
+
+def _drive(client, monkeypatch, ticker="MSFT", synth=None, filing=_fake_risk_factors):
+    from fastapi import Response as _Response
+
+    from conftest import TestingSessionLocal as _S
+    from models import Company as _C
+
+    monkeypatch.setattr("main.get_cik", lambda t: ("789019", "Microsoft"))
+    monkeypatch.setattr("main.get_price", lambda t: None)
+    monkeypatch.setattr("main.build_report_data", _fake_report_data)
+    monkeypatch.setattr("main.get_risk_factors", filing)
+    monkeypatch.setattr("main.time.sleep", lambda s: None)
+    if synth is not None:
+        monkeypatch.setattr("main.synthesize", synth)
+
+    db = _S()
+    try:
+        company = db.query(_C).filter(_C.ticker == ticker).first()
+        return list(_report_events(_Response(), ticker, company, False, db))
+    finally:
+        db.close()
+
+
+def _stage_keys(events):
+    return [e.key for e in events if isinstance(e, pipeline_module.Stage)]
+
+
+def test_events_arrive_in_pipeline_order(client, monkeypatch):
+    events = _drive(client, monkeypatch,
+                    synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
+    assert _stage_keys(events) == ["fetch", "fetch", "store", "metrics",
+                                   "metrics", "synthesis", "synthesis"]
+
+
+def test_a_known_company_skips_the_store_stage(client, monkeypatch):
+    """MSFT is seeded, so there is nothing to ingest."""
+    events = _drive(client, monkeypatch,
+                    synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
+    store = [e for e in events if isinstance(e, pipeline_module.Stage)
+             and e.key == "store"]
+    assert [e.state for e in store] == ["skipped"]
+
+
+def test_partial_arrives_before_synthesis_starts(client, monkeypatch):
+    """The whole point: figures on the page while the model is still writing."""
+    events = _drive(client, monkeypatch,
+                    synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
+    kinds = [type(e).__name__ for e in events]
+    partial_at = kinds.index("Partial")
+    synthesis_at = next(
+        i for i, e in enumerate(events)
+        if isinstance(e, pipeline_module.Stage) and e.key == "synthesis"
+    )
+    assert partial_at < synthesis_at
+
+
+def test_partial_carries_the_computed_figures_and_no_narrative(client, monkeypatch):
+    events = _drive(client, monkeypatch,
+                    synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
+    partial = next(e for e in events if isinstance(e, pipeline_module.Partial))
+    assert partial.payload["narrative"] is None
+    assert partial.payload["data"]["ttm"]["revenue"] == 100.0
+    assert partial.payload["company"] == "MSFT"
+
+
+def test_result_is_the_last_event(client, monkeypatch):
+    events = _drive(client, monkeypatch,
+                    synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
+    assert isinstance(events[-1], pipeline_module.Result)
+    assert events[-1].payload["narrative"]["verdict"] == "BUY-CASE"
+
+
+def test_synthesis_failure_marks_the_stage_failed_with_a_reason(client, monkeypatch):
+    def _boom(*a, **k):
+        raise _api_status_error(429)
+
+    events = _drive(client, monkeypatch, synth=_boom)
+    synth = [e for e in events if isinstance(e, pipeline_module.Stage)
+             and e.key == "synthesis"]
+    assert synth[-1].state == "failed"
+    assert "rate limited" in synth[-1].detail
+    assert events[-1].payload["narrative"] is None
+
+
+def test_missing_filing_marks_synthesis_failed(client, monkeypatch):
+    events = _drive(client, monkeypatch, filing=lambda cik: None)
+    synth = [e for e in events if isinstance(e, pipeline_module.Stage)
+             and e.key == "synthesis"]
+    assert synth[-1].state == "failed"
+    assert "10-K" in synth[-1].detail
+
+
+def test_stages_report_how_long_they_took(client, monkeypatch):
+    events = _drive(client, monkeypatch,
+                    synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
+    done = [e for e in events if isinstance(e, pipeline_module.Stage)
+            and e.state == "done"]
+    assert done and all(e.seconds is not None for e in done)
+
+
+# --- failure messages are for people ---
+
+@pytest.mark.parametrize("status,expected", [
+    (429, "rate limited"),
+    (401, "credentials"),
+    (403, "credentials"),
+    (400, "usage limit"),
+    (500, "unavailable"),
+])
+def test_failure_detail_explains_the_cause(status, expected):
+    assert expected in _synthesis_failure_detail(_api_status_error(status))
+
+
+def test_truncation_has_its_own_message():
+    from report import SynthesisTruncated
+
+    detail = _synthesis_failure_detail(SynthesisTruncated("hit max_tokens"))
+    assert "length limit" in detail
+
+
+def test_unknown_failure_still_says_something():
+    assert _synthesis_failure_detail(RuntimeError("???"))

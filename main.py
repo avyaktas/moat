@@ -647,23 +647,47 @@ def _prefetch_for_report(ticker: str, need_financials: bool) -> pipeline.Prefetc
         ) from exc
 
 
-def _build_report(request: Request, response: Response, ticker: str,
-                  company: Company | None, refresh: bool, db: Session):
-    """Build an uncached report. Split out so the timing breakdown opened
-    by get_report wraps exactly the work, and nothing else.
+def _report_events(response: Response, ticker: str, company: Company | None,
+                   refresh: bool, db: Session):
+    """Build a report, yielding progress as each stage actually completes.
+
+    A generator rather than a function because two callers want different
+    things: the JSON endpoint wants only the finished payload, while the
+    streaming endpoint wants to report each stage as it lands and to show the
+    computed figures before the model has written anything. Implementing that
+    twice would guarantee the two drift; this way there is one build and two
+    consumers of it.
+
+    HTTPException still propagates. The JSON endpoint lets FastAPI handle it;
+    the stream catches it and turns it into an error event.
     """
+    started = time.perf_counter()
+
     # Everything upstream at once: the financials fetch (only when this ticker
     # has never been seen), the 10-K, and the price. None depends on another's
     # answer, so in series they cost the sum and together they cost the
     # slowest.
+    yield pipeline.Stage("fetch", pipeline.STAGE_LABELS["fetch"], "running")
+    mark = time.perf_counter()
     fetched = _prefetch_for_report(ticker, need_financials=company is None)
+    yield pipeline.Stage("fetch", pipeline.STAGE_LABELS["fetch"], "done",
+                         seconds=time.perf_counter() - mark)
 
     if fetched.series is not None:
         logger.info("ingesting %s: not seen before", ticker)
+        yield pipeline.Stage("store", pipeline.STAGE_LABELS["store"], "running")
+        mark = time.perf_counter()
         store_financials(ticker, fetched.name, fetched.series)
         company = db.query(Company).filter(Company.ticker == ticker).first()
         if company is None:
             raise HTTPException(status_code=502, detail="Ingestion failed")
+        yield pipeline.Stage("store", pipeline.STAGE_LABELS["store"], "done",
+                             seconds=time.perf_counter() - mark)
+    else:
+        yield pipeline.Stage("store", pipeline.STAGE_LABELS["store"], "skipped")
+
+    yield pipeline.Stage("metrics", pipeline.STAGE_LABELS["metrics"], "running")
+    mark = time.perf_counter()
 
     # Newest first, then limited - so this takes the most recent quarters,
     # which is the order build_report_data documents that it needs.
@@ -679,10 +703,36 @@ def _build_report(request: Request, response: Response, ticker: str,
         data = build_report_data(rows, fetched.price)
     if "error" in data:
         raise HTTPException(status_code=404, detail=data["error"])
+    yield pipeline.Stage("metrics", pipeline.STAGE_LABELS["metrics"], "done",
+                         seconds=time.perf_counter() - mark)
 
     filing = fetched.filing
+
+    def _payload(narrative):
+        return {
+            "company": company.ticker,
+            "name": company.name,
+            "data": data,
+            "narrative": narrative,
+            "sources": {
+                "financials": "SEC EDGAR XBRL companyfacts",
+                "filing": filing["url"] if filing else None,
+                "report_date": filing["report_date"] if filing else None,
+                "price": "yfinance (market data; not from filings)",
+            },
+        }
+
+    # Everything above is computed from filed data and is final. Hand it over
+    # now so a reader has the scorecard and the figures while the model works.
+    partial = _payload(None)
+    partial["cache"] = {"cached": False, "generated_at": datetime.now(UTC).isoformat()}
+    yield pipeline.Partial(partial)
+
     narrative = None
     if filing:
+        yield pipeline.Stage("synthesis", pipeline.STAGE_LABELS["synthesis"], "running")
+        mark = time.perf_counter()
+        failure_detail = None
         for attempt in range(SYNTHESIS_ATTEMPTS):
             try:
                 with timing.stage("synthesis"):
@@ -696,6 +746,7 @@ def _build_report(request: Request, response: Response, ticker: str,
                 # degrading it to computed-figures-only.
                 retryable = _is_retryable(exc)
                 last = attempt == SYNTHESIS_ATTEMPTS - 1
+                failure_detail = _synthesis_failure_detail(exc)
                 logger.warning(
                     "synthesis attempt %d/%d failed for %s: %s: %s (retryable=%s)",
                     attempt + 1, SYNTHESIS_ATTEMPTS, company.ticker,
@@ -710,19 +761,19 @@ def _build_report(request: Request, response: Response, ticker: str,
                     # attempt, which would delay the response for nothing.
                     time.sleep(SYNTHESIS_BACKOFF_SECONDS * (2 ** attempt))
                 # final failure: narrative stays None and the report degrades
+        yield pipeline.Stage(
+            "synthesis", pipeline.STAGE_LABELS["synthesis"],
+            "done" if narrative is not None else "failed",
+            seconds=time.perf_counter() - mark,
+            detail=None if narrative is not None else failure_detail,
+        )
+    else:
+        yield pipeline.Stage(
+            "synthesis", pipeline.STAGE_LABELS["synthesis"], "failed",
+            detail="No 10-K filing was available for this company.",
+        )
 
-    payload = {
-        "company": company.ticker,
-        "name": company.name,
-        "data": data,
-        "narrative": narrative,
-        "sources": {
-            "financials": "SEC EDGAR XBRL companyfacts",
-            "filing": filing["url"] if filing else None,
-            "report_date": filing["report_date"] if filing else None,
-            "price": "yfinance (market data; not from filings)",
-        },
-    }
+    payload = _payload(narrative)
 
     # Only persist a complete report. A narrative of None means synthesis
     # failed or the filing was missing; caching that would freeze a degraded
@@ -755,6 +806,42 @@ def _build_report(request: Request, response: Response, ticker: str,
         # A degraded report was deliberately not persisted so the next request
         # retries. Letting a client cache it would defeat exactly that.
         response.headers["Cache-Control"] = "no-store"
+
+    logger.info("report %s built in %.2fs", ticker, time.perf_counter() - started)
+    yield pipeline.Result(payload)
+
+
+def _synthesis_failure_detail(exc: Exception) -> str:
+    """A sentence a reader can act on, rather than an exception repr."""
+    from report import SynthesisTruncated
+
+    if isinstance(exc, SynthesisTruncated):
+        return "The analysis ran past its length limit and could not be completed."
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        return "The analysis service is rate limited right now."
+    if status in (401, 403):
+        return "The analysis service rejected our credentials."
+    if status == 400:
+        return "The analysis service refused the request; its usage limit may be reached."
+    if status is not None and status >= 500:
+        return "The analysis service is unavailable right now."
+    if isinstance(exc, SynthesisError):
+        return "The model's response could not be read."
+    return "The analysis could not be generated."
+
+
+def _build_report(request: Request, response: Response, ticker: str,
+                  company: Company | None, refresh: bool, db: Session):
+    """Drive the build to completion and return the payload.
+
+    The JSON endpoint wants only the end of the sequence; the progress events
+    exist for the streaming endpoint.
+    """
+    payload = None
+    for event in _report_events(response, ticker, company, refresh, db):
+        if isinstance(event, pipeline.Result):
+            payload = event.payload
     return payload
 
 
