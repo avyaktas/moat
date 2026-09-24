@@ -3,6 +3,8 @@
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from models import Company, Financials, Brief, Report
 from database import get_db
@@ -114,7 +116,25 @@ def read_root():
     return render_landing()
 
 @app.get("/health")
-def read_health():
+def read_health(db: Session = Depends(get_db)):
+    """Report whether this instance can actually serve a request.
+
+    It used to return {"status": "ok"} without touching anything, which is the
+    one thing a health check must not do: every endpoint here needs Postgres,
+    so a container healthcheck wired to this would have kept an instance in
+    rotation while every real request failed on a dead connection pool.
+
+    The success shape is unchanged, so existing callers and the existing test
+    see exactly what they saw before.
+    """
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        logger.error("health check failed: database unreachable: %s", exc)
+        return JSONResponse(
+            {"status": "degraded", "database": "unreachable"},
+            status_code=503,
+        )
     return {"status": "ok"}
 
 @app.get("/companies")

@@ -550,3 +550,66 @@ def test_brief_still_served_when_freshness_check_fails(client, monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["answer"] == "cached answer"
     assert answers == []
+
+
+# --- /health must be able to say no ---
+#
+# It returned {"status": "ok"} unconditionally, without touching the database.
+# That is the one thing a health check must never do: a container healthcheck
+# wired to it would report a service healthy while every real request 500'd on
+# a dead connection pool.
+
+from sqlalchemy.exc import OperationalError
+
+from database import get_db as real_get_db
+
+
+class _DeadSession:
+    def execute(self, *a, **k):
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    def close(self):
+        pass
+
+
+def test_health_reports_degraded_when_database_is_unreachable(client):
+    from main import app as real_app
+
+    def _dead_db():
+        yield _DeadSession()
+
+    real_app.dependency_overrides[real_get_db] = _dead_db
+    try:
+        resp = client.get("/health")
+        assert resp.status_code == 503
+        assert resp.json()["status"] == "degraded"
+        assert resp.json()["database"] == "unreachable"
+    finally:
+        real_app.dependency_overrides.pop(real_get_db, None)
+
+
+def test_health_actually_queries_the_database(client):
+    """A health check that does not touch the dependency proves nothing."""
+    executed = []
+
+    class _WatchingSession:
+        def execute(self, stmt, *a, **k):
+            executed.append(str(stmt))
+            return None
+
+        def close(self):
+            pass
+
+    from main import app as real_app
+
+    def _watching_db():
+        yield _WatchingSession()
+
+    real_app.dependency_overrides[real_get_db] = _watching_db
+    try:
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        assert executed, "/health did not query the database at all"
+        assert "SELECT 1" in executed[0]
+    finally:
+        real_app.dependency_overrides.pop(real_get_db, None)
