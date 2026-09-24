@@ -94,12 +94,6 @@ _TOKENS = """
 
     --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
             'Helvetica Neue', Arial, sans-serif;
-
-    /* Transitional aliases, so pages not yet restyled keep working. */
-    --ink: var(--text);  --ink-soft: var(--text-muted);
-    --paper: var(--bg);  --rule: var(--border);
-    --hold: var(--pos);  --breach: var(--neg);
-    --unknown: var(--text-subtle);
   }
 
   @media (prefers-color-scheme: dark) {
@@ -198,6 +192,19 @@ _TOKENS = """
 """
 
 
+# Applied before the body paints, so a chosen theme never flashes the other
+# one first. Inlined in the head of every page rather than bundled with the
+# toggle: the preference is site-wide, the control is not.
+_THEME_BOOT = """<script>
+(function () {
+  try {
+    var t = localStorage.getItem('moat.theme');
+    if (t) document.documentElement.setAttribute('data-theme', t);
+  } catch (err) { /* private mode - follow the system preference */ }
+})();
+</script>"""
+
+
 def _document(title: str, body: str, css: str = "") -> str:
     """Wrap page body in the shared HTML shell (doctype, head, fonts, tokens).
 
@@ -209,6 +216,7 @@ def _document(title: str, body: str, css: str = "") -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
+{_THEME_BOOT}
 {_FONTS}
 <style>{_TOKENS}{css}</style>
 </head>
@@ -1034,11 +1042,7 @@ def _report_sheet(report: dict, pending: bool = False) -> str:
 THEME_SCRIPT = """
 <script>
 (function () {
-  var KEY = 'moat.theme';
-  try {
-    var saved = localStorage.getItem(KEY);
-    if (saved) document.documentElement.setAttribute('data-theme', saved);
-  } catch (err) { /* private mode - fall back to the system preference */ }
+  var KEY = 'moat.theme';   // applied in the head by _THEME_BOOT
 
   function bind() {
     var btn = document.getElementById('theme');

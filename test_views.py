@@ -877,3 +877,24 @@ def test_the_404_still_says_what_went_wrong():
     html = render_not_found("Unknown ticker: ZZZZ")
     assert "Unknown ticker: ZZZZ" in html
     assert 'href="/"' in html
+
+
+def test_the_theme_applies_on_every_page():
+    """Choosing light on a report and clicking the wordmark must not land you
+    back in dark."""
+    for html in (render_landing(), render_not_found("x"),
+                 render_report_shell("NVDA")):
+        assert "moat.theme" in html
+
+
+def test_the_theme_is_applied_before_the_body():
+    """Applied after paint, a chosen theme flashes the other one first."""
+    html = render_landing()
+    assert html.index("moat.theme") < html.index("<body>")
+
+
+def test_the_transitional_aliases_are_gone():
+    """They existed so un-migrated pages kept working. Every page is migrated."""
+    assert "--ink:" not in _TOKENS
+    assert "--paper:" not in _TOKENS
+    assert "--rule:" not in _TOKENS
