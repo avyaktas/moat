@@ -370,3 +370,32 @@ def test_every_scorecard_check_satisfies_the_check_model():
     for check in data["scorecard"]["checks"]:
         validated = CheckOut.model_validate(check)
         assert validated.status in {"PASS", "FAIL", "UNKNOWN"}
+
+
+def test_synthesize_parses_a_raw_control_character():
+    """The failure seen live: a literal newline inside a quoted passage.
+
+    A model copying a filing writes the line break rather than escaping it,
+    and json.loads rejects that by default - discarding an entire usable
+    synthesis over a character with no semantic content.
+    """
+    reply = (
+        '{"verdict": "WATCH-CASE", "reasoning": "Line one' + chr(10) + 'line two",'
+        ' "risks": []}'
+    )
+    client = _CapturingClient(reply)
+    result = report_module.synthesize({"ttm": {}}, "filing text", "Co", client=client)
+    assert result["verdict"] == "WATCH-CASE"
+    assert chr(10) in result["reasoning"]
+
+
+def test_synthesize_still_raises_on_genuinely_broken_json():
+    from report import SynthesisError
+
+    client = _CapturingClient("not json in any sense")
+    try:
+        report_module.synthesize({"ttm": {}}, "filing", "Co", client=client)
+    except SynthesisError:
+        pass
+    else:
+        raise AssertionError("tolerating control characters swallowed a real failure")

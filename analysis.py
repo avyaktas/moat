@@ -176,8 +176,15 @@ def answer_question(question: str, source_text: str, client: Anthropic | None = 
     # Models sometimes wrap JSON in markdown fences despite instructions.
     cleaned = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
  
+    # strict=False allows raw control characters inside strings. A model
+    # copying a passage out of a filing writes the line break literally
+    # rather than escaping it, and the default parser rejects the entire
+    # response over it. Observed live on the first real report generated
+    # after this audit: "Invalid control character at: line 36 column 864".
+    # Discarding a usable analysis over a character with no semantic content
+    # is the wrong trade; genuinely malformed JSON still fails.
     try:
-        parsed = json.loads(cleaned)
+        parsed = json.loads(cleaned, strict=False)
     except json.JSONDecodeError:
         return {
             "addressed": None,

@@ -160,3 +160,66 @@ def test_normalize_preserves_typography_for_display():
     """compact() folds for comparison; normalize() is for showing a human the
     text as written, so it must not rewrite the author's punctuation."""
     assert "’" in normalize("Microsoft’s risk")
+
+
+# --- control characters inside the model's JSON ---
+#
+# Observed live, on the first real report generated after this audit:
+#   SynthesisError: Model response was not valid JSON:
+#   Invalid control character at: line 36 column 864
+#
+# json.loads rejects raw control characters inside strings by default. A model
+# quoting a filing has every reason to emit one: the passages it copies span
+# lines, and it writes the line break literally rather than escaping it. The
+# whole response is then discarded over a character that carries no meaning.
+
+def test_answer_question_parses_a_raw_newline_in_a_quote():
+    import analysis
+
+    quote = "We face intense competition"
+    reply = (
+        '{"addressed": true, "answer": "Competition is a risk' + chr(10) + 'across markets",'
+        ' "quotes": ["' + quote + '"]}'
+    )
+
+    class _Stub:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            class _B:
+                type = "text"
+                text = reply
+
+            class _R:
+                content = [_B()]
+
+            return _R()
+
+    result = analysis.answer_question("q", SOURCE, client=_Stub())
+    assert result["addressed"] is True
+    assert result["quotes"] == [quote]
+    assert chr(10) in result["answer"]
+
+
+def test_answer_question_still_reports_genuinely_broken_json():
+    """Tolerating control characters must not swallow a real parse failure."""
+    import analysis
+
+    class _Stub:
+        def __init__(self):
+            self.messages = self
+
+        def create(self, **kwargs):
+            class _B:
+                type = "text"
+                text = "I'm afraid I can't help with that."
+
+            class _R:
+                content = [_B()]
+
+            return _R()
+
+    result = analysis.answer_question("q", SOURCE, client=_Stub())
+    assert result["addressed"] is None
+    assert "error" in result
