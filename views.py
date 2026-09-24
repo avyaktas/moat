@@ -1623,6 +1623,19 @@ def render_report_shell(ticker: str) -> str:
     // developing instead of snapping.
     var fresh = document.getElementById('sheet');
     if (fresh) fresh.classList.add('landed');
+    syncBar();
+  }}
+
+  // The swap replaces the sheet, not the bar above it, so the bar keeps
+  // whatever verdict it was rendered with - it sat on PENDING while the hero
+  // said WATCH-CASE. Mirror the hero's badge and company name into it.
+  function syncBar() {{
+    var hero = document.querySelector('.hero .badge');
+    var slot = document.querySelector('.topbar-ctx .badge');
+    if (hero && slot) {{
+      slot.textContent = hero.textContent.trim();
+      slot.className = hero.className;
+    }}
   }}
 
   function setStage(stage) {{

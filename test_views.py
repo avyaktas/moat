@@ -898,3 +898,12 @@ def test_the_transitional_aliases_are_gone():
     assert "--ink:" not in _TOKENS
     assert "--paper:" not in _TOKENS
     assert "--rule:" not in _TOKENS
+
+
+def test_the_sticky_bar_is_updated_when_the_report_lands():
+    """The swap replaces the sheet, not the bar above it, so the bar kept the
+    verdict it was rendered with - it sat on PENDING while the hero already
+    said WATCH-CASE."""
+    shell = render_report_shell("NVDA")
+    assert "syncBar" in shell
+    assert ".hero .badge" in shell
