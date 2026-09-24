@@ -24,6 +24,7 @@ from config import settings
 from database import get_db
 from filings import find_latest_10k, get_risk_factors
 from ingest import get_cik, ingest_company
+from logging_config import configure_logging
 from metrics import debt_to_equity, fcf_margin, net_margin, roe, roic, ttm
 from models import Brief, Company, Financials, Report
 from prices import get_price
@@ -31,6 +32,7 @@ from report import SynthesisError, build_report_data, synthesize
 from serialization import to_jsonable
 from views import render_landing, render_not_found, render_report
 
+configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
@@ -119,6 +121,7 @@ def get_or_ingest_company(ticker: str, db: Session) -> Company:
     company = db.query(Company).filter(Company.ticker == ticker).first()
     if company is not None:
         return company
+    logger.info("ingesting %s: not seen before", ticker)
     try:
         ingest_company(ticker)
     except ValueError:
@@ -383,6 +386,7 @@ def get_brief(request: Request, ticker: TickerPath,
         .first()
     )
     if cached is not None and not refresh and _brief_is_current(company.ticker, cached):
+        logger.info("brief cache hit for %s", company.ticker)
         return _brief_to_dict(cached)
 
     try:
@@ -409,7 +413,11 @@ def get_brief(request: Request, ticker: TickerPath,
     if filing is None:
         raise HTTPException(status_code=404, detail="No 10-K filing found")
 
+    logger.info("brief cache miss for %s: analysing filing %s",
+                company.ticker, filing["report_date"])
     result = answer_question(question, filing["text"])
+    logger.info("brief for %s: addressed=%s grounding=%s",
+                company.ticker, result["addressed"], result["grounding_rate"])
 
     values = {
         "company_id": company.id,
@@ -525,6 +533,8 @@ def get_report(request: Request, response: Response, ticker: TickerPath,
             if request.headers.get("if-none-match") == etag:
                 return Response(status_code=304, headers=_cache_headers(etag))
 
+            logger.info("report cache hit for %s, age %.1f days",
+                        company.ticker, age.total_seconds() / 86400)
             payload = json.loads(cached.payload)
             payload["cache"] = {
                 "cached": True,
@@ -535,6 +545,8 @@ def get_report(request: Request, response: Response, ticker: TickerPath,
             return payload
 
     # cache miss or stale: build it
+    logger.info("report cache miss for %s (refresh=%s): rebuilding",
+                company.ticker, refresh)
     # Newest first, then limited - so this takes the most recent quarters,
     # which is the order build_report_data documents that it needs.
     rows = (
@@ -594,6 +606,9 @@ def get_report(request: Request, response: Response, ticker: TickerPath,
     # but skip the write so the next request retries the narrative.
     now = datetime.now(UTC)
     if narrative is not None:
+        logger.info("report for %s: verdict=%s grounding=%s",
+                    company.ticker, narrative.get("verdict"),
+                    narrative.get("grounding_rate"))
         payload_json = json.dumps(payload, default=to_jsonable)
         stmt = pg_insert(Report).values(
             company_id=company.id,

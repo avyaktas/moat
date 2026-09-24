@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # combination is what a real deployment looks like.
     refresh_token: str = ""
 
+    # Raise to DEBUG when diagnosing; WARNING to quieten a noisy deployment.
+    log_level: str = "INFO"
+
     @field_validator("test_database_url", mode="before")
     @classmethod
     def _blank_means_default(cls, v):
