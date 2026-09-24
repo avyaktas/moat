@@ -129,3 +129,99 @@ def test_render_report_survives_legacy_stringified_cache():
     assert "$512.30" in html       # share price coerced from "512.30"
     assert "$5.0B" in html         # a positive change coerced from a string
     assert "-$3.0B" in html        # a negative change too
+
+
+# --- unknown is not zero, on the page as well as in the data ---
+#
+# The project's load-bearing rule is that missing data stays missing and is
+# never conflated with zero. _health used `if change:` to decide whether to
+# render a change, so a genuine zero took the same em-dash as an unknown -
+# the rule held all the way through the pipeline and then broke in the last
+# place anyone would check, the rendered page.
+
+def _report_with_health(health: dict) -> dict:
+    return {
+        "company": "TEST", "name": "Test Co",
+        "data": {
+            "as_of": "2025-06-30",
+            "ttm": {},
+            "price": None,
+            "scorecard": {
+                "checks": [], "summary": {"passed": 0, "evaluable": 0, "unknown": 0},
+                "valuation": {},
+                "financial_health": health,
+            },
+        },
+        "narrative": None, "sources": {}, "cache": {},
+    }
+
+
+def test_zero_change_renders_as_zero_not_unknown():
+    html = render_report(_report_with_health({
+        "cash": {"prior": 1000.0, "current": 1000.0, "change": 0.0},
+        "survivability": {"verdict": ""},
+    }))
+    row = html.split("Cash")[1].split("</tr>")[0]
+    assert "$0" in row, "a real zero change must render as $0"
+
+
+def test_unknown_change_still_renders_as_em_dash():
+    html = render_report(_report_with_health({
+        "cash": {"prior": None, "current": 1000.0, "change": None},
+        "survivability": {"verdict": ""},
+    }))
+    row = html.split("Cash")[1].split("</tr>")[0]
+    assert EM_DASH in row, "an unknown change must stay an em-dash"
+    assert "$0" not in row
+
+
+def test_zero_and_unknown_change_render_differently():
+    """The whole point: these two must not look the same."""
+    zero = render_report(_report_with_health({
+        "cash": {"prior": 1.0, "current": 1.0, "change": 0.0},
+        "survivability": {"verdict": ""},
+    })).split("Cash")[1].split("</tr>")[0]
+    unknown = render_report(_report_with_health({
+        "cash": {"prior": None, "current": None, "change": None},
+        "survivability": {"verdict": ""},
+    })).split("Cash")[1].split("</tr>")[0]
+    assert zero != unknown
+
+
+def _report_with_checks(checks: list) -> dict:
+    r = _report_with_health({"survivability": {"verdict": ""}})
+    r["data"]["scorecard"]["checks"] = checks
+    return r
+
+
+def test_unexpected_check_status_does_not_crash():
+    """A status outside the three known values used to raise KeyError."""
+    html = render_report(_report_with_checks(
+        [{"name": "Novel", "status": "SKIPPED", "detail": "new status"}]
+    ))
+    assert "Novel" in html
+
+
+def test_missing_filing_url_is_not_a_dead_link():
+    """esc(None) is the empty string, so href="" linked to the current page."""
+    r = _report_with_health({"survivability": {"verdict": ""}})
+    r["sources"] = {"financials": "SEC EDGAR", "price": "yfinance",
+                    "filing": None, "report_date": None}
+    html = render_report(r)
+    assert 'href=""' not in html
+
+
+def test_present_filing_url_is_still_a_link():
+    r = _report_with_health({"survivability": {"verdict": ""}})
+    r["sources"] = {"financials": "SEC EDGAR", "price": "yfinance",
+                    "filing": "https://example.com/10k.htm",
+                    "report_date": "2025-06-30"}
+    html = render_report(r)
+    assert 'href="https://example.com/10k.htm"' in html
+
+
+def test_zero_share_price_renders_as_zero():
+    r = _report_with_health({"survivability": {"verdict": ""}})
+    r["data"]["price"] = {"price": 0}
+    html = render_report(r)
+    assert "$0.00" in html

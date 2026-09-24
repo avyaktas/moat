@@ -122,6 +122,16 @@ def esc(s) -> str:
 # ---------------------------------------------------------------- components
 
 
+# An unrecognised status renders as "unknown" rather than raising. Indexing a
+# literal dict with c["status"] meant a new status value anywhere upstream
+# took down the whole tearsheet with a KeyError.
+_STATE_CLASS = {"PASS": "hold", "FAIL": "breach", "UNKNOWN": "unknown"}
+
+
+def _state_of(check: dict) -> str:
+    return _STATE_CLASS.get(check.get("status"), "unknown")
+
+
 def _wall(checks: list[dict]) -> str:
     """The signature element: the scorecard as a wall.
 
@@ -131,7 +141,7 @@ def _wall(checks: list[dict]) -> str:
     """
     blocks = []
     for c in checks:
-        state = {"PASS": "hold", "FAIL": "breach", "UNKNOWN": "unknown"}[c["status"]]
+        state = _state_of(c)
         blocks.append(
             f'<div class="block {state}" title="{esc(c["name"])}: {esc(c["detail"])}">'
             f'<span class="block-label">{esc(c["name"])}</span></div>'
@@ -142,7 +152,7 @@ def _wall(checks: list[dict]) -> str:
 def _checks_table(checks: list[dict]) -> str:
     rows = []
     for c in checks:
-        state = {"PASS": "hold", "FAIL": "breach", "UNKNOWN": "unknown"}[c["status"]]
+        state = _state_of(c)
         rows.append(
             f'<tr class="{state}">'
             f'<td class="check-mark"></td>'
@@ -167,7 +177,8 @@ def _figures(ttm: dict, valuation: dict, price: dict | None) -> str:
         ("P / FCF", mult(valuation.get("p_fcf"))),
         ("P / E", mult(valuation.get("p_e"))),
         ("Share price",
-         f"${float(price['price']):,.2f}" if price and price.get("price") else "—"),
+         f"${float(price['price']):,.2f}"
+         if price and price.get("price") is not None else "—"),
     ]
     cells = "".join(
         f'<div class="fig"><span class="fig-label">{esc(k)}</span>'
@@ -193,6 +204,11 @@ def _health(health: dict) -> str:
         # json.dumps(default=str) serializer stores numbers as strings, and
         # "1234" > 0 raises TypeError.
         change = float(change) if change is not None else None
+        # A change of exactly zero is a fact - the balance did not move - and
+        # must not render as the em-dash that means "we do not know". money()
+        # already maps None to the em-dash, so passing change straight through
+        # keeps the two cases distinct. Zero gets no up/down colour because it
+        # went in neither direction.
         direction = ""
         if change:
             direction = "up" if change > 0 else "down"
@@ -201,7 +217,7 @@ def _health(health: dict) -> str:
             f"<td>{esc(label)}</td>"
             f'<td class="n">{money(row.get("prior"))}</td>'
             f'<td class="n">{money(row.get("current"))}</td>'
-            f'<td class="n {direction}">{money(change) if change else "—"}</td>'
+            f'<td class="n {direction}">{money(change)}</td>'
             f"</tr>"
         )
     surv = health.get("survivability", {})
@@ -269,6 +285,18 @@ def render_report(report: dict) -> str:
 
     grounding = narrative.get("grounding_rate")
     grounding_str = f"{float(grounding) * 100:.0f}%" if grounding is not None else "—"
+
+    # esc(None) is the empty string, so an absent filing URL produced
+    # href="" - a link back to the current page, which reads as working and
+    # is not. With no URL there is nothing to link to, so say so in text.
+    filing_url = sources.get("filing")
+    if filing_url:
+        filing_line = (
+            f'<a href="{esc(filing_url)}">10-K filed '
+            f'{esc(sources.get("report_date"))}</a>'
+        )
+    else:
+        filing_line = "10-K unavailable"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -515,8 +543,7 @@ def render_report(report: dict) -> str:
   <footer>
     <p>Financials from {esc(sources.get("financials"))}.
        Price from {esc(sources.get("price"))}.</p>
-    <p>Filing: <a href="{esc(sources.get("filing"))}">10-K filed
-       {esc(sources.get("report_date"))}</a> ·
+    <p>Filing: {filing_line} ·
        {grounding_str} of quotes verified against the source document.</p>
     <p>{"Cached" if cache.get("cached") else "Generated"}
        {esc(cache.get("generated_at", ""))[:19].replace("T", " ")} UTC.</p>
