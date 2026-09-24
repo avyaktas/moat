@@ -1,13 +1,9 @@
-from fastapi.testclient import TestClient
-from main import app
-
 import json
 import filings
 import analysis
 from models import Brief, Company, Report
 from conftest import TestingSessionLocal
 
-client = TestClient(app)
 
 def test_health(client):
     response = client.get("/health")
@@ -24,7 +20,9 @@ def test_company_lowercase(client):
     assert response.status_code == 200
     assert response.json()["ticker"] == "MSFT"
 
-def test_get_company_not_found(client):
+def test_unknown_ticker_404s_without_network(client):
+    """Renamed from test_get_company_not_found, which was defined twice in
+    this file - Python bound the second definition and this one never ran."""
     response = client.get("/company/FAKE")
     assert response.status_code == 404
 
