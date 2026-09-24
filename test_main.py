@@ -20,9 +20,15 @@ def test_company_lowercase(client):
     assert response.status_code == 200
     assert response.json()["ticker"] == "MSFT"
 
-def test_unknown_ticker_404s_without_network(client):
+def test_unknown_ticker_404s_without_network(client, monkeypatch):
     """Renamed from test_get_company_not_found, which was defined twice in
-    this file - Python bound the second definition and this one never ran."""
+    this file - Python bound the second definition and this one never ran.
+
+    It also made a live SEC request, despite the name: with get_cik unmocked,
+    /company/FAKE downloads the full ticker file to discover FAKE is not in
+    it.
+    """
+    monkeypatch.setattr("main.ingest_company", _raise_unknown)
     response = client.get("/company/FAKE")
     assert response.status_code == 404
 
@@ -153,6 +159,9 @@ def test_report_survives_anthropic_outage(client, monkeypatch):
     monkeypatch.setattr("main.build_report_data", _fake_report_data)
     monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
     monkeypatch.setattr("main.synthesize", _raise_overloaded)
+    # The retry backoff is asserted in test_no_sleep_after_the_final_attempt;
+    # sitting through it here only slows the suite.
+    monkeypatch.setattr("main.time.sleep", lambda s: None)
 
     resp = client.get("/company/MSFT/report")
     assert resp.status_code == 200
@@ -185,6 +194,7 @@ def test_report_not_cached_when_synthesis_returns_bad_json(client, monkeypatch):
     monkeypatch.setattr("main.build_report_data", _fake_report_data)
     monkeypatch.setattr("main.get_risk_factors", _fake_risk_factors)
     monkeypatch.setattr("main.synthesize", _raise_bad_json)
+    monkeypatch.setattr("main.time.sleep", lambda s: None)
 
     resp = client.get("/company/MSFT/report")
     assert resp.status_code == 200
