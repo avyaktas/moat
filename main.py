@@ -521,7 +521,7 @@ def _as_utc(value: datetime) -> datetime:
 # browser that keeps serving the old markup from its own cache until the
 # max-age expires - which is exactly what happened while building the new
 # layout: the server had changed and the page had not.
-RENDER_VERSION = "2"
+RENDER_VERSION = "3"
 
 
 def _report_etag(ticker: str, generated_at: datetime) -> str:

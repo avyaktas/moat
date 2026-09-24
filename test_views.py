@@ -907,3 +907,14 @@ def test_the_sticky_bar_is_updated_when_the_report_lands():
     shell = render_report_shell("NVDA")
     assert "syncBar" in shell
     assert ".hero .badge" in shell
+
+
+def test_muted_text_is_dark_enough_to_read():
+    """--text-subtle is used for section headings, labels and the footer, so
+    it carries real text and has to clear WCAG AA, not merely look quiet.
+
+    Measured in a browser against both backgrounds: it was 2.99:1 in light and
+    4.12:1 in dark, and is now 4.87 and 5.72.
+    """
+    assert "--text-subtle:  #6a727c;" in _TOKENS   # light
+    assert "--text-subtle:  #828d99;" in _TOKENS   # dark

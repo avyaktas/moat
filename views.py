@@ -68,7 +68,7 @@ _TOKENS = """
 
     --text:         #14181d;
     --text-muted:   #5c6670;
-    --text-subtle:  #8e969f;
+    --text-subtle:  #6a727c;
 
     --accent:       #4f46e5;
     --accent-text:  #ffffff;
@@ -107,7 +107,7 @@ _TOKENS = """
 
       --text:         #e7eaee;
       --text-muted:   #9aa4b0;
-      --text-subtle:  #6b7580;
+      --text-subtle:  #828d99;
 
       --accent:       #8b85f0;
       --accent-text:  #0c0e11;
@@ -132,7 +132,7 @@ _TOKENS = """
 
     --text:         #e7eaee;
     --text-muted:   #9aa4b0;
-    --text-subtle:  #6b7580;
+    --text-subtle:  #828d99;
 
     --accent:       #8b85f0;
     --accent-text:  #0c0e11;
