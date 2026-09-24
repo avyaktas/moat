@@ -465,7 +465,13 @@ def _as_utc(value: datetime) -> datetime:
     renders value[:19] and appends " UTC" - displaying local time under a
     label asserting it was not.
 
-    A naive value is assumed to be UTC, which is what the column stores.
+    A naive value is assumed to be UTC. That assumption is now defensive
+    rather than load-bearing: briefs.created_at was the only naive datetime
+    column and is timezone-aware as of revision 46498d1ab364, so nothing in
+    the schema reaches this branch. Worth being explicit that the assumption
+    was not true of that column before the migration - a naive column
+    defaulting to now() stores the DATABASE SESSION's local time, not UTC,
+    which is exactly why it was changed.
     """
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
