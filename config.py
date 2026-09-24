@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +20,27 @@ class Settings(BaseSettings):
     # warned about at startup when an API key is present, since that
     # combination is what a real deployment looks like.
     refresh_token: str = ""
+
+    @field_validator("test_database_url", mode="before")
+    @classmethod
+    def _blank_means_default(cls, v):
+        """Treat an empty value as absent, so the field default applies.
+
+        .env.example ships `TEST_DATABASE_URL=` to document the variable's
+        existence. pydantic-settings reads that as the empty string - a value,
+        which overrides the default - so a fresh clone got
+        create_engine("") and an unreadable "Could not parse SQLAlchemy URL"
+        before a single test ran.
+
+        Fixing it here rather than in .env.example is what makes it stay
+        fixed: the env file is documentation and anyone may copy, edit or
+        truncate it, while this holds regardless of what it says. A variable
+        set to nothing means "I did not set this", which is what the default
+        is for.
+        """
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return "postgresql+psycopg://avyaktasharma@localhost:5432/moat_test"
+        return v
 
     @property
     def db_url(self) -> str:
@@ -43,7 +65,6 @@ class Settings(BaseSettings):
         makes the app tolerant of how the value was entered.
         """
         return self.anthropic_api_key.strip()
-
 
 
 settings = Settings()
