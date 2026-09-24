@@ -744,3 +744,121 @@ def test_the_theme_choice_is_remembered():
     html = render_report(r)
     assert "localStorage" in html
     assert "catch (err)" in html, "private mode must not break the page"
+
+
+# --- zero layout shift ---
+#
+# A generic spinner tells you to wait. A skeleton tells you what is coming and
+# holds its seat, so when the figures land they land in place: the swap
+# changes pixels, not positions.
+
+def test_the_skeleton_has_the_same_shape_as_the_report():
+    """Six criteria and twelve figures are fixed by the domain, so the
+    placeholder can reserve exactly the right number of boxes."""
+    shell = render_report_shell("NVDA")
+    assert shell.count('class="check"') == 6
+    assert shell.count('class="fig"') == 12
+
+
+def test_the_skeleton_uses_the_same_classes_as_the_real_content():
+    """Same classes means the same CSS box, which is what makes the swap
+    invisible. Different markup would need its sizes kept in sync by hand."""
+    shell = render_report_shell("NVDA")
+    real = render_report_fragment(_computed_only_report(), pending=True)
+    for cls in ('class="sheet"', 'class="hero"', 'class="checks"',
+                'class="figures"', 'class="meter"', 'class="table-scroll"'):
+        assert cls in shell, f"{cls} missing from the skeleton"
+        assert cls in real, f"{cls} missing from the report"
+
+
+def test_the_skeleton_reserves_every_section():
+    shell = render_report_shell("NVDA")
+    for heading in ("Scorecard", "Figures", "Financial health",
+                    "Hype versus reality", "Risks and sell triggers",
+                    "The case", "The strategy"):
+        assert heading in shell, f"{heading} not reserved while loading"
+
+
+def test_the_skeleton_reserves_five_health_rows():
+    assert render_report_shell("NVDA").count('<th scope="row">') == 5
+
+
+def test_repeated_blocks_have_a_fixed_height():
+    """Without this the skeleton and the filled card are different sizes and
+    the page jumps on arrival - the whole point of the exercise."""
+    from views import _REPORT_CSS
+
+    # Measured in a browser, skeleton against filled, not guessed.
+    assert "min-height: 108px" in _REPORT_CSS   # criterion card
+    assert "min-height: 90px" in _REPORT_CSS    # figure tile
+    assert "height: 45px" in _REPORT_CSS        # health row
+    assert "min-height: 48px" in _REPORT_CSS    # survivability panel
+    assert "min-height: 26px" in _REPORT_CSS    # share price
+    assert "min-height: 23px" in _REPORT_CSS    # hero subtitle
+    assert "min-height: 21px" in _REPORT_CSS    # meter caption
+
+
+def test_content_fades_in_when_it_lands():
+    from views import _REPORT_CSS
+
+    assert "@keyframes landed" in _REPORT_CSS
+    assert "animation: landed 180ms" in _REPORT_CSS
+    assert "classList.add('landed')" in render_report_shell("NVDA")
+
+
+def test_the_fade_does_not_start_from_blank():
+    """Fading from zero would flash an empty page between states."""
+    from views import _REPORT_CSS
+
+    keyframes = _REPORT_CSS.split("@keyframes landed")[1].split("}")[0]
+    assert "opacity: 0.4" in keyframes
+    assert "opacity: 0;" not in keyframes
+
+
+def test_progress_is_out_of_flow():
+    """Floating, so it can arrive and leave without moving the report."""
+    from views import _REPORT_CSS
+
+    progress = _REPORT_CSS.split(".progress {")[1].split("}")[0]
+    assert "position: fixed" in progress
+
+
+def test_progress_announces_itself_to_screen_readers():
+    shell = render_report_shell("NVDA")
+    assert 'aria-live="polite"' in shell
+    assert 'aria-label="Report progress"' in shell
+
+
+def test_progress_is_dismissed_after_the_report_lands():
+    shell = render_report_shell("NVDA")
+    assert "dismiss(" in shell
+    assert "gone" in shell
+
+
+def test_the_ticker_is_known_immediately():
+    """It comes from the URL, so it never needs a placeholder."""
+    shell = render_report_shell("nvda")
+    assert "<h1>NVDA</h1>" in shell
+
+
+def test_skeleton_placeholders_are_marked():
+    assert 'class="sk ' in render_report_shell("NVDA")
+
+
+def test_the_skeleton_reserves_the_survivability_panel():
+    """It was missing entirely, and alone accounted for 64px of shift."""
+    assert 'class="survivability"' in render_report_shell("NVDA")
+
+
+def test_the_layout_responds_to_narrow_screens():
+    from views import _REPORT_CSS
+
+    assert "@media (max-width: 720px)" in _REPORT_CSS
+
+
+def test_wide_content_scrolls_inside_its_own_container():
+    """The health table is too wide for a phone; it must scroll itself rather
+    than make the whole page scroll sideways."""
+    from views import _REPORT_CSS
+
+    assert ".table-scroll { overflow-x: auto; }" in _REPORT_CSS

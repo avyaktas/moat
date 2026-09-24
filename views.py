@@ -572,12 +572,13 @@ _REPORT_CSS = """
   }
   .hero-sub {
     margin: var(--s2) 0 0; color: var(--text-muted); font-size: 0.92rem;
+    min-height: 23px;   /* one line of text, so the skeleton matches */
   }
   .hero-sub .dot { color: var(--text-subtle); margin: 0 var(--s2); }
   .hero-right { text-align: right; display: flex; flex-direction: column;
                 align-items: flex-end; gap: var(--s3); }
   .price { font-size: 1.6rem; font-weight: 600; letter-spacing: -0.02em;
-           line-height: 1; }
+           line-height: 1; display: block; min-height: 26px; }
   .price-label { display: block; font-size: 0.72rem; font-weight: 500;
                  letter-spacing: 0.06em; text-transform: uppercase;
                  color: var(--text-subtle); margin-bottom: var(--s1); }
@@ -617,6 +618,7 @@ _REPORT_CSS = """
   }
   .meter-caption {
     margin: 0 0 var(--s7); font-size: 0.85rem; color: var(--text-muted);
+    min-height: 21px;
   }
 
   /* ---- sections ---- */
@@ -636,6 +638,10 @@ _REPORT_CSS = """
   .check {
     border: 1px solid var(--border); border-radius: var(--radius);
     background: var(--surface); padding: var(--s4);
+    /* Fixed box so the skeleton and the real card are the same size and
+       nothing moves when one replaces the other. Two lines of detail is the
+       worst case across the six criteria. */
+    min-height: 108px;
   }
   .check-top {
     display: flex; align-items: center; justify-content: space-between;
@@ -662,6 +668,7 @@ _REPORT_CSS = """
   .fig {
     border: 1px solid var(--border); border-radius: var(--radius);
     background: var(--surface); padding: var(--s4);
+    min-height: 90px;   /* label + value, same for skeleton and real */
   }
   .fig-label {
     display: block; font-size: 0.78rem; color: var(--text-muted);
@@ -686,6 +693,7 @@ _REPORT_CSS = """
   }
   table.health td, table.health th[scope="row"] {
     padding: var(--s3) 0; border-bottom: 1px solid var(--border);
+    height: 45px;   /* pinned so skeleton rows match filled ones */
   }
   table.health tbody tr:last-child td,
   table.health tbody tr:last-child th { border-bottom: none; }
@@ -695,6 +703,7 @@ _REPORT_CSS = """
     margin: var(--s4) 0 0; font-size: 0.88rem; color: var(--text-muted);
     padding: var(--s3) var(--s4); background: var(--surface-2);
     border-radius: var(--radius); border: 1px solid var(--border);
+    min-height: 48px;
   }
 
   /* ---- prose ---- */
@@ -743,7 +752,100 @@ _REPORT_CSS = """
   footer a { color: var(--text-muted); }
   .disclaimer { margin-top: var(--s4); max-width: var(--measure); }
 
+  /* ---- skeletons ----
+     Shaped like the content they stand in for. A generic spinner tells you
+     to wait; a skeleton tells you what is coming and reserves its space, so
+     the arrival is a change of pixels rather than a change of layout. */
+  .sk {
+    display: block; border-radius: 5px; background: var(--border);
+    position: relative; overflow: hidden;
+  }
+  .sk::after {
+    content: ''; position: absolute; inset: 0; transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent,
+      color-mix(in srgb, var(--surface) 70%, transparent), transparent);
+    animation: sweep 1.4s ease-in-out infinite;
+  }
+  @keyframes sweep { to { transform: translateX(100%); } }
+  .sk-line   { height: 11px; }
+  .sk-value  { height: 20px; margin-top: 7px; }
+  .sk-title  { height: 15px; }
+  .sk-w40 { width: 40%; } .sk-w55 { width: 55%; } .sk-w70 { width: 70%; }
+  .sk-w85 { width: 85%; } .sk-w100 { width: 100%; }
+  .sk-cell { display: inline-block; height: 12px; width: 62px; }
+
+  /* Content that has just replaced a skeleton. Starts partly visible rather
+     than at zero so the swap reads as developing, not as a blank flash. */
+  .landed { animation: landed 180ms ease-out; }
+  @keyframes landed {
+    from { opacity: 0.4; }
+    to   { opacity: 1; }
+  }
+
+  /* ---- progress ----
+     Floating, so it costs no layout at all: it can appear and leave without
+     moving a single pixel of the report behind it. */
+  .progress {
+    position: fixed; right: var(--s5); bottom: var(--s5); z-index: 30;
+    width: 254px; padding: var(--s4); margin: 0; list-style: none;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.10), 0 1px 2px rgba(0, 0, 0, 0.06);
+    transition: opacity 260ms ease, transform 260ms ease;
+  }
+  .progress.gone { opacity: 0; transform: translateY(6px); pointer-events: none; }
+  .progress li {
+    display: flex; align-items: center; gap: var(--s2);
+    padding: 5px 0; font-size: 0.82rem; color: var(--text-subtle);
+  }
+  .progress .mark {
+    width: 13px; height: 13px; flex: none; border-radius: 50%;
+    border: 1.5px solid currentColor;
+  }
+  .progress .took { margin-left: auto; font-size: 0.72rem; opacity: 0.8;
+                    font-variant-numeric: tabular-nums; }
+  .progress li[data-state="running"] { color: var(--text); }
+  .progress li[data-state="running"] .mark {
+    border-color: var(--accent);
+    border-right-color: transparent; border-bottom-color: transparent;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .progress li[data-state="done"] { color: var(--text-muted); }
+  .progress li[data-state="done"] .mark {
+    background: var(--pos); border-color: var(--pos);
+  }
+  .progress li[data-state="skipped"] .mark { opacity: 0.45; }
+  .progress li[data-state="failed"] { color: var(--neg); }
+  .progress li[data-state="failed"] .mark { border-color: var(--neg); }
+
+  /* ---- a narrative section still being written ---- */
+  .pending {
+    display: flex; align-items: center; gap: var(--s2); margin: 0;
+    font-size: 0.85rem; color: var(--text-subtle);
+  }
+  .pending-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex: none;
+    background: var(--text-subtle); animation: pulse 1.3s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+  /* ---- failure ---- */
+  .failure {
+    margin: var(--s5) 0 0; padding: var(--s4) var(--s5);
+    border: 1px solid color-mix(in srgb, var(--neg) 30%, var(--border));
+    border-left-width: 3px; border-left-color: var(--neg);
+    border-radius: var(--radius); background: var(--neg-soft);
+  }
+  .failure h2 {
+    margin: 0 0 var(--s2); color: var(--neg); font-size: 0.8rem;
+    letter-spacing: 0.06em;
+  }
+  .failure p { margin: 0; font-size: 0.95rem; color: var(--text); }
+  .failure a { color: var(--text); }
+
   @media (max-width: 720px) {
+    .progress { left: var(--s4); right: var(--s4); width: auto; }
     .sheet { padding: var(--s5) var(--s4) var(--s7); }
     .topbar-inner { padding: 0 var(--s4); }
     .hero { gap: var(--s4); }
@@ -1268,10 +1370,11 @@ def render_not_found(detail: str) -> str:
 
 
 def _progress_list(active: str = "fetch") -> str:
-    """The stage checklist, with one stage already running.
+    """The stage checklist, floating clear of the report.
 
-    Rendered server-side so the sequence is visible in the very first byte the
-    browser receives, rather than appearing once JavaScript has run.
+    Rendered server-side so the sequence is in the first byte rather than
+    appearing once JavaScript has run, and positioned out of flow so it can
+    arrive and leave without moving any of the content behind it.
     """
     stages = [
         ("fetch", "Fetching SEC filings"),
@@ -1287,7 +1390,112 @@ def _progress_list(active: str = "fetch") -> str:
             f'<span class="mark"></span><span class="label">{esc(label)}</span>'
             f'<span class="took"></span></li>'
         )
-    return f'<ul class="progress" id="progress">{"".join(items)}</ul>'
+    return (
+        f'<ul class="progress" id="progress" aria-live="polite" '
+        f'aria-label="Report progress">{"".join(items)}</ul>'
+    )
+
+
+def _sk(classes: str = "sk-line sk-w70") -> str:
+    return f'<span class="sk {classes}"></span>'
+
+
+def _skeleton_sheet(ticker: str) -> str:
+    """The report's shape, before any of it is known.
+
+    Deliberately the same markup and the same classes as the real sheet, so
+    every box is already the size the content will need: six criterion cards,
+    twelve figure tiles, five health rows. When the figures land they land in
+    place - the swap changes pixels, not positions.
+
+    A generic spinner would have been less code and less use. This says what
+    is coming and holds its seat.
+    """
+    safe = esc(ticker.upper())
+    checks = "".join(
+        f'<div class="check">'
+        f'<div class="check-top">{_sk("sk-title sk-w55")}'
+        f'{_sk("sk-line sk-w40")}</div>'
+        f'<p class="check-detail">{_sk("sk-line sk-w100")}'
+        f'{_sk("sk-line sk-w70")}</p>'
+        f"</div>"
+        for _ in range(6)
+    )
+    figures = "".join(
+        f'<div class="fig">{_sk("sk-line sk-w70")}{_sk("sk-value sk-w55")}</div>'
+        for _ in range(12)
+    )
+    rows = "".join(
+        f'<tr><th scope="row">{_sk("sk-line sk-w55")}</th>'
+        f'<td class="n">{_sk("sk-cell")}</td>'
+        f'<td class="n">{_sk("sk-cell")}</td>'
+        f'<td class="n">{_sk("sk-cell")}</td></tr>'
+        for _ in range(5)
+    )
+    segments = "".join('<span class="seg"></span>' for _ in range(6))
+
+    return f"""<div class="sheet" id="sheet">
+
+  <header class="hero">
+    <div>
+      <h1>{safe}</h1>
+      <p class="hero-sub">{_sk("sk-line sk-w70")}</p>
+    </div>
+    <div class="hero-right">
+      <div><span class="price-label">Share price</span>
+           <span class="price">{_sk("sk-value sk-w100")}</span></div>
+      <span class="badge none">PENDING</span>
+    </div>
+  </header>
+
+  <div class="meter">{segments}</div>
+  <p class="meter-caption">{_sk("sk-line sk-w40")}</p>
+
+  <section>
+    <h2>Scorecard</h2>
+    <div class="checks">{checks}</div>
+  </section>
+
+  <section>
+    <h2>Figures</h2>
+    <div class="figures">{figures}</div>
+  </section>
+
+  <section>
+    <h2>Financial health</h2>
+    <div class="table-scroll">
+      <table class="health">
+        <thead><tr><th scope="col"></th><th scope="col" class="n">Prior qtr</th>
+        <th scope="col" class="n">Latest qtr</th>
+        <th scope="col" class="n">Change</th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>
+    <p class="survivability">{_sk("sk-line sk-w55")}</p>
+  </section>
+
+  <section>
+    <h2>Hype versus reality</h2>
+    <div class="prose lede">{_pending("Writing analysis\u2026")}</div>
+  </section>
+
+  <section>
+    <h2>Risks and sell triggers</h2>
+    {_pending("Reading the risk factors\u2026")}
+  </section>
+
+  <section>
+    <h2>The case</h2>
+    <div class="prose">{_pending("Writing analysis\u2026")}</div>
+  </section>
+
+  <section>
+    <h2>The strategy</h2>
+    <div class="prose">{_pending("Writing analysis\u2026")}</div>
+  </section>
+
+</div>
+"""
 
 
 def render_report_fragment(report: dict, pending: bool = False) -> str:
@@ -1309,48 +1517,50 @@ def render_failure(title: str, detail: str) -> str:
 def render_report_shell(ticker: str) -> str:
     """The page served immediately while the report is built.
 
-    It carries the masthead and the stage checklist so there is something real
-    on screen in the first response, then connects to the stream and replaces
-    itself as each stage completes: the computed figures arrive at about two
-    seconds, the narrative when the model is done.
+    It carries the sticky bar, the hero and a full skeleton of the report, so
+    there is real structure on screen in the first response, then connects to
+    the stream and fills itself in as each stage completes: the computed
+    figures arrive at about two seconds, the narrative when the model is done.
 
     EventSource rather than polling: the server already knows when each stage
     finishes, so there is nothing to discover by asking repeatedly, and no job
     record to store or clean up.
     """
     safe = esc(ticker.upper())
-    body = f"""<div class="sheet" id="sheet">
+    stream_url = json.dumps(f"/company/{ticker.upper()}/report/stream")
+    lost = json.dumps(render_failure(
+        "Connection lost",
+        "The connection to the server dropped before the report was finished. "
+        "Reloading will pick up from wherever it got to."))
 
-  <header class="masthead">
-    <div>
-      <p class="eyebrow"><a href="/">Moat</a> · Filing analysis</p>
-      <h1 class="ticker">{safe}</h1>
-      <p class="company-name">Building this report&hellip;</p>
-    </div>
-    <div class="verdict none">
-      <small>Framework verdict</small>
-      PENDING
-    </div>
-  </header>
+    body = f"""
+{_topbar(safe, "", "PENDING", "none")}
+{_skeleton_sheet(ticker)}
+{_progress_list()}
 
-  <div class="skeleton" aria-hidden="true"></div>
-
-  {_progress_list()}
-
-  <noscript>
-    <p class="wall-caption" style="margin-top:1.5rem">
-      This page builds the report as it loads and needs JavaScript.
-      The same analysis is available as JSON at
-      <a href="/company/{safe}/report">/company/{safe}/report</a>.
-    </p>
-  </noscript>
-
-</div>
+<noscript>
+  <div class="sheet">
+    <p class="meter-caption">This page builds the report as it loads and needs
+      JavaScript. The same analysis is available as JSON at
+      <a href="/company/{safe}/report">/company/{safe}/report</a>.</p>
+  </div>
+</noscript>
 <script>
 (function () {{
-  var sheet = document.getElementById('sheet');
-  var source = new EventSource({json.dumps(f"/company/{ticker.upper()}/report/stream")});
+  var source = new EventSource({stream_url});
   var settled = false;
+  var bar = document.getElementById('progress');
+
+  function swap(html) {{
+    var current = document.getElementById('sheet');
+    if (!current) return;
+    current.outerHTML = html;
+    // The skeleton and the real content occupy the same boxes, so this is a
+    // change of pixels rather than of layout. The fade makes it read as
+    // developing instead of snapping.
+    var fresh = document.getElementById('sheet');
+    if (fresh) fresh.classList.add('landed');
+  }}
 
   function setStage(stage) {{
     var li = document.querySelector('[data-stage="' + stage.key + '"]');
@@ -1360,49 +1570,46 @@ def render_report_shell(ticker: str) -> str:
       li.querySelector('.took').textContent = stage.seconds.toFixed(1) + 's';
     }}
     if (stage.detail) {{
-      li.querySelector('.label').textContent = stage.label + ' — ' + stage.detail;
+      li.querySelector('.label').textContent = stage.label + ' \u2014 ' + stage.detail;
     }}
   }}
 
-  source.addEventListener('stage', function (e) {{
-    setStage(JSON.parse(e.data));
-  }});
+  function dismiss(delay) {{
+    if (!bar) return;
+    setTimeout(function () {{ bar.classList.add('gone'); }}, delay);
+  }}
 
-  // The computed figures, ready long before the narrative. Replacing the
-  // whole sheet keeps one source of truth for the layout: the server renders
-  // it, the page swaps it in.
-  source.addEventListener('partial', function (e) {{
-    sheet.outerHTML = JSON.parse(e.data).html;
-  }});
+  source.addEventListener('stage', function (e) {{ setStage(JSON.parse(e.data)); }});
+  source.addEventListener('partial', function (e) {{ swap(JSON.parse(e.data).html); }});
 
   source.addEventListener('done', function (e) {{
     settled = true;
-    document.getElementById('sheet').outerHTML = JSON.parse(e.data).html;
+    swap(JSON.parse(e.data).html);
+    dismiss(900);
     source.close();
   }});
 
   source.addEventListener('failed', function (e) {{
     settled = true;
-    var payload = JSON.parse(e.data);
     var target = document.getElementById('sheet') || document.body;
-    target.insertAdjacentHTML('beforeend', payload.html);
+    target.insertAdjacentHTML('beforeend', JSON.parse(e.data).html);
     var running = document.querySelector('[data-state="running"]');
     if (running) running.setAttribute('data-state', 'failed');
+    dismiss(2500);
     source.close();
   }});
 
-  // A dropped connection must not leave the page spinning forever.
+  // A dropped connection must not leave the page building forever.
   source.onerror = function () {{
     if (settled) return;
     settled = true;
     source.close();
     var target = document.getElementById('sheet') || document.body;
-    target.insertAdjacentHTML('beforeend',
-      {json.dumps(render_failure(
-          "Connection lost",
-          "The connection to the server dropped before the report was "
-          "finished. Reloading will pick up from wherever it got to."))});
+    target.insertAdjacentHTML('beforeend', {lost});
+    dismiss(2500);
   }};
 }})();
-</script>"""
-    return _document(f"{safe} · Moat", body, _REPORT_CSS)
+</script>
+{THEME_SCRIPT}
+"""
+    return _document(f"{safe} \u00b7 Moat", body, _REPORT_CSS)
