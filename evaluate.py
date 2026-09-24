@@ -8,13 +8,65 @@ Runs every question in eval_data against the live analyzer and reports:
     Ungrounded quotes    - total fabricated quotes across all questions
     Answer correctness   - answerable/specific questions passing key_terms
 
-Run:  python evaluate.py
+WHY THE SOURCE DOCUMENT IS PINNED
+
+    The answer key in eval_data was verified by term count against Microsoft's
+    FY2025 Item 1A. Fetching "the latest 10-K" instead silently re-points the
+    harness at a document the key was never checked against: by FY2026 the
+    word GDPR no longer appears, so question 15 fails for a reason that has
+    nothing to do with the analyzer. A regression guardrail has to measure the
+    same thing every time, so the graded document is a committed fixture.
+
+    The model calls stay real - that is the whole point of the eval. Only the
+    8MB SEC download leaves the loop, which is also what makes this cheap
+    enough to run after every commit.
+
+Run:  python evaluate.py          # graded against the pinned fixture
+      python evaluate.py --live   # refetch the newest 10-K instead
 Cost: ~one API call per question (a few cents total).
 """
+
+import argparse
+import json
+import pathlib
 
 from analysis import answer_question
 from eval_data import QUESTIONS
 from filings import get_risk_factors
+
+FIXTURE_DIR = pathlib.Path(__file__).parent / "fixtures"
+FIXTURE_TEXT = FIXTURE_DIR / "msft_fy2025_item1a.txt"
+FIXTURE_META = FIXTURE_DIR / "msft_fy2025_item1a.json"
+
+MSFT_CIK = "789019"
+
+
+def load_source(live: bool = False) -> dict | None:
+    """Return {text, report_date, url} for the document to grade against.
+
+    Defaults to the pinned fixture; --live refetches the newest 10-K, which
+    is how you find out the fixture has drifted from what MSFT now files.
+    """
+    if live:
+        filing = get_risk_factors(MSFT_CIK)
+        if filing is None:
+            return None
+        return {
+            "text": filing["text"],
+            "report_date": filing["report_date"],
+            "url": filing["url"],
+            "origin": "live SEC fetch",
+        }
+
+    if not FIXTURE_TEXT.exists():
+        return None
+    meta = json.loads(FIXTURE_META.read_text(encoding="utf-8"))
+    return {
+        "text": FIXTURE_TEXT.read_text(encoding="utf-8"),
+        "report_date": meta["report_date"],
+        "url": meta["url"],
+        "origin": f"pinned fixture {FIXTURE_TEXT.name}",
+    }
 
 
 def grade_one(q: dict, source: str, client) -> dict:
@@ -48,14 +100,34 @@ def main():
 
     from config import settings
 
-    print("Fetching Microsoft risk factors...")
-    filing = get_risk_factors("789019")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="grade against a freshly fetched 10-K instead of the pinned fixture",
+    )
+    args = parser.parse_args()
+
+    filing = load_source(live=args.live)
     if filing is None:
-        print("Could not fetch filing.")
+        print("Could not load the filing to grade against.")
         return
     source = filing["text"]
+    print(
+        f"Source: {filing['origin']} - Item 1A as of {filing['report_date']}, "
+        f"{len(source):,} chars"
+    )
 
-    client = Anthropic(api_key=settings.anthropic_api_key)
+    # The key in eval_data was verified against FY2025 by term count. Say so
+    # loudly when grading anything else, so a surprising score is read as
+    # document drift rather than as a regression in the analyzer.
+    if filing["report_date"] != "2025-06-30":
+        print(
+            f"  WARNING: answer key was verified against 2025-06-30, not "
+            f"{filing['report_date']}. Scores are not comparable to the baseline."
+        )
+
+    client = Anthropic(api_key=settings.anthropic_key)
 
     rows = []
     print(f"Running {len(QUESTIONS)} questions...\n")
