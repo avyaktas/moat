@@ -21,8 +21,24 @@ WHY THE SOURCE DOCUMENT IS PINNED
     8MB SEC download leaves the loop, which is also what makes this cheap
     enough to run after every commit.
 
+WHICH NUMBERS ARE GATES AND WHICH ARE ADVISORY
+
+    The model is sampled, and temperature is deprecated on this model, so the
+    output cannot be pinned. Three consecutive unchanged runs scored answer
+    correctness at 100%, 80% and 93% - a +/-20 point band that no real
+    regression could be seen through. Across those same runs the grounding
+    rate never left 100% and the hallucination count never left 0.
+
+    So the harness separates them. Hallucinations, ungrounded quotes and the
+    grounding rate are HARD GATES: a quote is either in the document or it is
+    not, and that verdict does not depend on sampling. They exit non-zero when
+    breached, which makes this usable in CI. Answer correctness is ADVISORY -
+    it substring-matches key terms against free-text phrasing, so it moves on
+    wording alone. Read it as a trend, never as a pass/fail.
+
 Run:  python evaluate.py          # graded against the pinned fixture
       python evaluate.py --live   # refetch the newest 10-K instead
+Exit: 0 if every hard gate held, 1 otherwise.
 Cost: ~one API call per question (a few cents total).
 """
 
@@ -39,6 +55,13 @@ FIXTURE_TEXT = FIXTURE_DIR / "msft_fy2025_item1a.txt"
 FIXTURE_META = FIXTURE_DIR / "msft_fy2025_item1a.json"
 
 MSFT_CIK = "789019"
+
+# A quote is either in the document or it is not, so the grounding gates are
+# absolutes rather than targets. These held at 100%/0/0 across every run taken
+# while building this harness, including runs whose answer correctness moved
+# by 20 points - which is exactly why they are the gates and answer
+# correctness is not.
+MIN_GROUNDING_RATE = 1.0
 
 
 def load_source(live: bool = False) -> dict | None:
@@ -168,14 +191,34 @@ def main():
     print("\n" + "=" * 50)
     print("RESULTS")
     print("=" * 50)
-    print(f"Abstention accuracy:  {abstention_acc:.0%}  ({sum(r['abstention_correct'] for r in rows)}/{n})")
-    print(f"Hallucinations:       {hallucinations}   (absent questions answered anyway; target 0)")
+    print("Hard gates - these are the guarantees; any failure exits non-zero")
+    print(f"  Hallucinations:       {hallucinations}   (absent questions answered anyway; must be 0)")
+    print(f"  Ungrounded quotes:    {total_fake}   (fabricated quotes; must be 0)")
     if mean_grounding is not None:
-        print(f"Mean grounding rate:  {mean_grounding:.0%}  (quotes found in source)")
-    print(f"Ungrounded quotes:    {total_fake}   (fabricated quotes; target 0)")
+        print(f"  Mean grounding rate:  {mean_grounding:.0%}  (quotes found in source; floor {MIN_GROUNDING_RATE:.0%})")
+    print()
+    print("Advisory - phrasing-sensitive, varies run to run (see module docstring)")
+    print(f"  Abstention accuracy:  {abstention_acc:.0%}  ({sum(r['abstention_correct'] for r in rows)}/{n})")
     if correctness is not None:
-        print(f"Answer correctness:   {correctness:.0%}  ({sum(r['answer_correct'] for r in answerable)}/{len(answerable)} answerable/specific)")
+        print(f"  Answer correctness:   {correctness:.0%}  ({sum(r['answer_correct'] for r in answerable)}/{len(answerable)} answerable/specific)")
+
+    failures = []
+    if hallucinations:
+        failures.append(f"{hallucinations} hallucination(s) on absent questions")
+    if total_fake:
+        failures.append(f"{total_fake} ungrounded quote(s)")
+    if mean_grounding is not None and mean_grounding < MIN_GROUNDING_RATE:
+        failures.append(
+            f"grounding rate {mean_grounding:.0%} below floor {MIN_GROUNDING_RATE:.0%}"
+        )
+
+    print()
+    if failures:
+        print("FAIL: " + "; ".join(failures))
+        return 1
+    print("PASS: every hard gate held.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
