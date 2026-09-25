@@ -495,3 +495,426 @@ def test_the_swap_anchor_is_unique_per_rendering():
     """Two elements with the same id would make the swap pick one at random."""
     html = render_report_fragment(_computed_only_report(), pending=True)
     assert html.count('id="sheet"') == 1
+
+
+# --- the design system ---
+#
+# Tokens, not literals. Every page pulls the same palette and spacing scale
+# from one place, so light and dark are a variable swap rather than a second
+# stylesheet, and a colour can only be wrong in one spot.
+
+from views import _TOKENS
+
+
+def test_both_themes_are_defined():
+    assert "prefers-color-scheme: dark" in _TOKENS
+    assert '[data-theme="dark"]' in _TOKENS
+    assert '[data-theme="light"]' in _TOKENS
+
+
+def test_the_palette_is_variables_not_literals():
+    for token in ("--bg", "--surface", "--border", "--text", "--text-muted",
+                  "--accent", "--pos", "--neg"):
+        assert f"{token}:" in _TOKENS, f"{token} missing"
+
+
+def test_there_is_a_spacing_scale():
+    for step in ("--s1", "--s2", "--s4", "--s6", "--s8"):
+        assert f"{step}:" in _TOKENS
+
+
+def test_numbers_use_tabular_figures():
+    """Otherwise digits change width as values update and columns jitter."""
+    assert "tabular-nums" in _TOKENS
+    assert "'tnum'" in _TOKENS
+
+
+def test_focus_is_visible():
+    """Keyboard users need to see where they are, in both themes."""
+    assert ":focus-visible" in _TOKENS
+    assert "outline:" in _TOKENS
+
+
+def test_reduced_motion_is_respected():
+    assert "prefers-reduced-motion: reduce" in _TOKENS
+
+
+def test_one_typeface_with_a_system_fallback():
+    from views import _FONTS
+
+    assert "Inter" in _FONTS
+    assert "display=swap" in _FONTS, "text must not be invisible while loading"
+    assert 'rel="preload"' in _FONTS
+    assert "-apple-system" in _TOKENS, "no system fallback for the webfont"
+
+
+def test_the_old_display_faces_are_gone():
+    """Three families was three loads and three chances to flash."""
+    from views import _FONTS
+
+    assert "Instrument+Serif" not in _FONTS
+    assert "JetBrains" not in _FONTS
+
+
+def test_every_page_carries_the_tokens():
+    assert "--accent" in render_landing()
+    assert "--accent" in render_not_found("x")
+    assert "--accent" in render_report_shell("NVDA")
+
+
+# --- search behaviour ---
+
+def test_search_autofocuses():
+    assert "inp.focus();" in render_landing()
+
+
+def test_slash_focuses_search():
+    """The shortcut every search-first product has."""
+    html = render_landing()
+    assert "keydown" in html
+    assert "e.key !== '/'" in html
+
+
+def test_slash_does_not_steal_keystrokes_while_typing():
+    html = render_landing()
+    assert "TEXTAREA" in html
+    assert "isContentEditable" in html
+
+
+def test_recent_searches_are_remembered():
+    html = render_landing()
+    assert "moat.recent" in html
+    assert "localStorage" in html
+
+
+def test_recent_searches_survive_private_mode():
+    """localStorage throws in some browsers; a search must not fail for it."""
+    html = render_landing()
+    assert "catch (err)" in html
+
+
+def test_recent_list_is_bounded():
+    assert "slice(0, 5)" in render_landing()
+
+
+def test_recent_row_is_hidden_until_there_is_something_in_it():
+    html = render_landing()
+    assert 'id="recent-row" hidden' in html
+
+
+def test_example_tickers_are_still_offered():
+    html = render_landing()
+    for ticker in ("MSFT", "AAPL", "NVDA", "IBM"):
+        assert f"/company/{ticker}/report/view" in html
+
+
+# --- the report layout ---
+
+def test_verdict_renders_as_a_colour_coded_badge():
+    r = _computed_only_report()
+    for verdict, cls in (("BUY-CASE", "buy"), ("WATCH-CASE", "watch"),
+                         ("AVOID-CASE", "avoid")):
+        r["narrative"] = {"verdict": verdict, "grounding_rate": 1.0,
+                          "hype_vs_reality": "h", "risks": [], "reasoning": "r",
+                          "strategy": "s"}
+        html = render_report_fragment(r, pending=False)
+        assert f'class="badge {cls}"' in html, f"{verdict} badge missing"
+
+
+def test_an_unknown_verdict_gets_the_neutral_badge():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert 'class="badge none"' in html
+
+
+def test_negative_changes_are_red_and_positive_green():
+    """Direction is the point of the change column."""
+    html = render_report_fragment(_report_with_health({
+        "cash": {"prior": 10.0, "current": 5.0, "change": -5_000_000_000.0},
+        "total_debt": {"prior": 5.0, "current": 10.0, "change": 5_000_000_000.0},
+        "survivability": {"verdict": ""},
+    }), pending=True)
+    assert '<span class="neg">-$5.0B</span>' in html
+    assert '<span class="pos">$5.0B</span>' in html
+
+
+def test_an_unknown_change_gets_no_colour():
+    """Missing is not a direction."""
+    html = render_report_fragment(_report_with_health({
+        "cash": {"prior": None, "current": None, "change": None},
+        "survivability": {"verdict": ""},
+    }), pending=True)
+    row = html.split("Cash")[1].split("</tr>")[0]
+    assert "pos" not in row and "neg" not in row
+    assert EM_DASH in row
+
+
+def test_a_zero_change_gets_no_colour():
+    html = render_report_fragment(_report_with_health({
+        "cash": {"prior": 1.0, "current": 1.0, "change": 0.0},
+        "survivability": {"verdict": ""},
+    }), pending=True)
+    row = html.split("Cash")[1].split("</tr>")[0]
+    assert "pos" not in row and "neg" not in row
+
+
+def test_the_meter_has_one_segment_per_criterion():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert html.count('class="seg ') == 2   # the sample report has two checks
+
+
+def test_the_meter_is_described_for_screen_readers():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert 'role="img"' in html
+    assert "criteria hold" in html
+
+
+def test_the_scorecard_is_a_grid_of_cards():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert 'class="checks"' in html
+    assert 'class="check pass"' in html
+    assert 'class="check fail"' in html
+
+
+def test_check_cards_carry_a_status_tag():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert 'class="tag pass"' in html
+    assert 'class="tag fail"' in html
+
+
+def test_number_columns_are_marked_for_alignment():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert 'class="n"' in html
+
+
+def test_health_rows_use_header_cells_for_their_labels():
+    """A data table's row labels are headers; screen readers announce them."""
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert '<th scope="row">Cash</th>' in html
+    assert 'scope="col"' in html
+
+
+def test_the_health_table_can_scroll_on_a_narrow_screen():
+    html = render_report_fragment(_computed_only_report(), pending=True)
+    assert 'class="table-scroll"' in html
+
+
+def test_the_verified_badge_is_visible_on_a_quote():
+    r = _computed_only_report()
+    r["narrative"] = {
+        "verdict": "WATCH-CASE", "grounding_rate": 1.0, "hype_vs_reality": "h",
+        "reasoning": "r", "strategy": "s",
+        "risks": [{"risk": "R", "quote": "Q", "sell_trigger": "T",
+                   "quote_verified": True}],
+    }
+    html = render_report_fragment(r, pending=False)
+    assert 'class="verified"' in html
+    assert "Quote verified against filing" in html
+    assert "<blockquote>" in html
+
+
+def test_an_unverified_quote_is_marked_differently():
+    r = _computed_only_report()
+    r["narrative"] = {
+        "verdict": "WATCH-CASE", "grounding_rate": 0.0, "hype_vs_reality": "h",
+        "reasoning": "r", "strategy": "s",
+        "risks": [{"risk": "R", "quote": "Q", "sell_trigger": "T",
+                   "quote_verified": False}],
+    }
+    html = render_report_fragment(r, pending=False)
+    assert 'class="unverified"' in html
+    assert "Quote not found in filing" in html
+
+
+def test_the_report_has_a_sticky_bar_with_a_theme_toggle():
+    r = _computed_only_report()
+    r["narrative"] = {"verdict": "BUY-CASE", "grounding_rate": 1.0,
+                      "hype_vs_reality": "h", "risks": [], "reasoning": "r",
+                      "strategy": "s"}
+    html = render_report(r)
+    assert 'class="topbar"' in html
+    assert 'id="theme"' in html
+    assert "moat.theme" in html
+
+
+def test_the_theme_choice_is_remembered():
+    r = _computed_only_report()
+    r["narrative"] = {"verdict": "BUY-CASE", "grounding_rate": 1.0,
+                      "hype_vs_reality": "h", "risks": [], "reasoning": "r",
+                      "strategy": "s"}
+    html = render_report(r)
+    assert "localStorage" in html
+    assert "catch (err)" in html, "private mode must not break the page"
+
+
+# --- zero layout shift ---
+#
+# A generic spinner tells you to wait. A skeleton tells you what is coming and
+# holds its seat, so when the figures land they land in place: the swap
+# changes pixels, not positions.
+
+def test_the_skeleton_has_the_same_shape_as_the_report():
+    """Six criteria and twelve figures are fixed by the domain, so the
+    placeholder can reserve exactly the right number of boxes."""
+    shell = render_report_shell("NVDA")
+    assert shell.count('class="check"') == 6
+    assert shell.count('class="fig"') == 12
+
+
+def test_the_skeleton_uses_the_same_classes_as_the_real_content():
+    """Same classes means the same CSS box, which is what makes the swap
+    invisible. Different markup would need its sizes kept in sync by hand."""
+    shell = render_report_shell("NVDA")
+    real = render_report_fragment(_computed_only_report(), pending=True)
+    for cls in ('class="sheet"', 'class="hero"', 'class="checks"',
+                'class="figures"', 'class="meter"', 'class="table-scroll"'):
+        assert cls in shell, f"{cls} missing from the skeleton"
+        assert cls in real, f"{cls} missing from the report"
+
+
+def test_the_skeleton_reserves_every_section():
+    shell = render_report_shell("NVDA")
+    for heading in ("Scorecard", "Figures", "Financial health",
+                    "Hype versus reality", "Risks and sell triggers",
+                    "The case", "The strategy"):
+        assert heading in shell, f"{heading} not reserved while loading"
+
+
+def test_the_skeleton_reserves_five_health_rows():
+    assert render_report_shell("NVDA").count('<th scope="row">') == 5
+
+
+def test_repeated_blocks_have_a_fixed_height():
+    """Without this the skeleton and the filled card are different sizes and
+    the page jumps on arrival - the whole point of the exercise."""
+    from views import _REPORT_CSS
+
+    # Measured in a browser, skeleton against filled, not guessed.
+    assert "min-height: 108px" in _REPORT_CSS   # criterion card
+    assert "min-height: 90px" in _REPORT_CSS    # figure tile
+    assert "height: 45px" in _REPORT_CSS        # health row
+    assert "min-height: 48px" in _REPORT_CSS    # survivability panel
+    assert "min-height: 26px" in _REPORT_CSS    # share price
+    assert "min-height: 23px" in _REPORT_CSS    # hero subtitle
+    assert "min-height: 21px" in _REPORT_CSS    # meter caption
+
+
+def test_content_fades_in_when_it_lands():
+    from views import _REPORT_CSS
+
+    assert "@keyframes landed" in _REPORT_CSS
+    assert "animation: landed 180ms" in _REPORT_CSS
+    assert "classList.add('landed')" in render_report_shell("NVDA")
+
+
+def test_the_fade_does_not_start_from_blank():
+    """Fading from zero would flash an empty page between states."""
+    from views import _REPORT_CSS
+
+    keyframes = _REPORT_CSS.split("@keyframes landed")[1].split("}")[0]
+    assert "opacity: 0.4" in keyframes
+    assert "opacity: 0;" not in keyframes
+
+
+def test_progress_is_out_of_flow():
+    """Floating, so it can arrive and leave without moving the report."""
+    from views import _REPORT_CSS
+
+    progress = _REPORT_CSS.split(".progress {")[1].split("}")[0]
+    assert "position: fixed" in progress
+
+
+def test_progress_announces_itself_to_screen_readers():
+    shell = render_report_shell("NVDA")
+    assert 'aria-live="polite"' in shell
+    assert 'aria-label="Report progress"' in shell
+
+
+def test_progress_is_dismissed_after_the_report_lands():
+    shell = render_report_shell("NVDA")
+    assert "dismiss(" in shell
+    assert "gone" in shell
+
+
+def test_the_ticker_is_known_immediately():
+    """It comes from the URL, so it never needs a placeholder."""
+    shell = render_report_shell("nvda")
+    assert "<h1>NVDA</h1>" in shell
+
+
+def test_skeleton_placeholders_are_marked():
+    assert 'class="sk ' in render_report_shell("NVDA")
+
+
+def test_the_skeleton_reserves_the_survivability_panel():
+    """It was missing entirely, and alone accounted for 64px of shift."""
+    assert 'class="survivability"' in render_report_shell("NVDA")
+
+
+def test_the_layout_responds_to_narrow_screens():
+    from views import _REPORT_CSS
+
+    assert "@media (max-width: 720px)" in _REPORT_CSS
+
+
+def test_wide_content_scrolls_inside_its_own_container():
+    """The health table is too wide for a phone; it must scroll itself rather
+    than make the whole page scroll sideways."""
+    from views import _REPORT_CSS
+
+    assert ".table-scroll { overflow-x: auto; }" in _REPORT_CSS
+
+
+def test_the_404_offers_a_way_to_try_again():
+    """The reason you are here is almost always a mistyped ticker, and the
+    fix is to type another one - not to go back and start over."""
+    html = render_not_found("Unknown ticker: ZZZZ")
+    assert "<form" in html
+    assert "Try another ticker" in html
+    assert "inp.focus();" in html
+
+
+def test_the_404_still_says_what_went_wrong():
+    html = render_not_found("Unknown ticker: ZZZZ")
+    assert "Unknown ticker: ZZZZ" in html
+    assert 'href="/"' in html
+
+
+def test_the_theme_applies_on_every_page():
+    """Choosing light on a report and clicking the wordmark must not land you
+    back in dark."""
+    for html in (render_landing(), render_not_found("x"),
+                 render_report_shell("NVDA")):
+        assert "moat.theme" in html
+
+
+def test_the_theme_is_applied_before_the_body():
+    """Applied after paint, a chosen theme flashes the other one first."""
+    html = render_landing()
+    assert html.index("moat.theme") < html.index("<body>")
+
+
+def test_the_transitional_aliases_are_gone():
+    """They existed so un-migrated pages kept working. Every page is migrated."""
+    assert "--ink:" not in _TOKENS
+    assert "--paper:" not in _TOKENS
+    assert "--rule:" not in _TOKENS
+
+
+def test_the_sticky_bar_is_updated_when_the_report_lands():
+    """The swap replaces the sheet, not the bar above it, so the bar kept the
+    verdict it was rendered with - it sat on PENDING while the hero already
+    said WATCH-CASE."""
+    shell = render_report_shell("NVDA")
+    assert "syncBar" in shell
+    assert ".hero .badge" in shell
+
+
+def test_muted_text_is_dark_enough_to_read():
+    """--text-subtle is used for section headings, labels and the footer, so
+    it carries real text and has to clear WCAG AA, not merely look quiet.
+
+    Measured in a browser against both backgrounds: it was 2.99:1 in light and
+    4.12:1 in dark, and is now 4.87 and 5.72.
+    """
+    assert "--text-subtle:  #6a727c;" in _TOKENS   # light
+    assert "--text-subtle:  #828d99;" in _TOKENS   # dark
