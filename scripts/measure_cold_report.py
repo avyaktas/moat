@@ -19,14 +19,17 @@ import argparse
 import logging
 import sys
 import time
+from pathlib import Path
 
-sys.path.insert(0, ".")
+# Relative to this file, not to the working directory, so it runs
+# from anywhere.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from database import SessionLocal  # noqa: E402
-from main import app  # noqa: E402
-from models import Company, Financials, Report  # noqa: E402
+from moat.database import SessionLocal  # noqa: E402
+from moat.main import app  # noqa: E402
+from moat.models import Company, Financials, Report  # noqa: E402
 
 
 def make_cold(ticker: str) -> None:
@@ -47,8 +50,9 @@ def make_cold(ticker: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ticker", nargs="?", default="NVDA")
-    parser.add_argument("--keep", action="store_true",
-                        help="do not clear the ticker first (measures a warm path)")
+    parser.add_argument(
+        "--keep", action="store_true", help="do not clear the ticker first (measures a warm path)"
+    )
     args = parser.parse_args()
 
     logging.getLogger().setLevel(logging.INFO)
@@ -67,8 +71,10 @@ def main() -> int:
     print(f"=== {ticker}: uncached /report ===")
     print(f"  HTTP {resp.status_code}    wall clock {wall:.2f}s")
     if narrative:
-        print(f"  narrative present: verdict={narrative.get('verdict')} "
-              f"grounding={narrative.get('grounding_rate')}")
+        print(
+            f"  narrative present: verdict={narrative.get('verdict')} "
+            f"grounding={narrative.get('grounding_rate')}"
+        )
     else:
         print("  narrative ABSENT - report degraded to computed figures only")
     # The stage breakdown itself is logged by timing.track at INFO.

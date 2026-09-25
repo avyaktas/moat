@@ -1,264 +1,166 @@
 # Moat
 
-Type in any US-listed ticker and get back a full analyst report on the company:
-computed financials from their SEC filings, a scorecard against value investing
-criteria, the real risks pulled from their 10-K, and a verdict on whether the
-business is worth owning.
+Type a US-listed ticker and get an analyst report built from that company's own
+SEC filings: quarterly financials pulled from EDGAR's XBRL API, value-investing
+criteria scored in code, and a narrative from Claude in which **every quote is
+string-matched against the filing before it reaches the page**. The model
+interprets numbers it is given; it never calculates them, and it cannot cite a
+passage that is not there. Where data is missing the report says so rather than
+substituting zero.
 
-**Live:** https://moat-production-a6c2.up.railway.app
-(type a ticker, or go straight to a tearsheet: `/company/MSFT/report/view`)
+![The report page for MSFT](docs/report.jpg)
 
-Every claim in the analysis comes with a quote from the filing, and the code
-checks that the quote is actually there.
+---
 
-> **Why "Moat"?** An economic moat is a durable competitive advantage that keeps
-> competitors from eating into a company's profits. Sustained high returns on
-> invested capital are the tell. In a market with no barriers, money floods
-> toward high returns and drags them back to average, so a company earning 27% on
-> capital year after year has something protecting it. The scorecard's main check
-> is basically a moat detector.
+## Why it exists
 
-
-```
-GET /company/MSFT/report
-```
-
-## What you get
-
-Numbers computed from filed data, never from the model:
-
-```json
-"ttm": {
-  "revenue": 318273000000, "net_income": 125216000000,
-  "net_margin": 0.393, "roic": 0.275, "revenue_growth": 0.179
-}
-```
-
-A scorecard against explicit thresholds:
-
-```
-ROIC              PASS   TTM ROIC 27.5% vs threshold 15%
-Net margin        PASS   TTM net margin 39.3% vs floor 10%
-Margin stability  PASS   Margin range 6.1% across 5 periods (max 15%)
-FCF conversion    FAIL   TTM FCF is 0.58x net income (floor 0.80x)
-Leverage          PASS   Debt/equity 0.10 - conservative
-Rule of 40        PASS   Growth 17.9% + FCF margin 22.9% = 40.8
-```
-
-A verdict that says what would change it:
-
-> **WATCH-CASE.** At a P/E of 23.4x and P/FCF of over 40x, the market is already
-> pricing in continued strong execution. Track FCF conversion each quarter. This
-> becomes a BUY-CASE if conversion trends back toward 0.80x, which would confirm
-> the current capex is a reinvestment cycle rather than a permanent drag.
-
-And risks with sell triggers, each quote checked against the 10-K:
-
-> **Risk:** Heavy AI and cloud capex is compressing free cash flow relative to net
-> income.
-> **Quote (verified):** *"We are incurring significant costs to build and maintain
-> infrastructure to support cloud-based and AI services, reducing operating margins."*
-> **Sell trigger:** FCF conversion stays well below 0.80x for multiple years with
-> no acceleration in revenue growth.
-
-## How I know it works
-
-Most LLM projects can't answer that question. This one has an evaluation harness:
-24 questions across three categories, including traps where the model knows the
-answer from training but the document doesn't contain it.
-
-For example, Microsoft's risk factors never name a single competitor. Ask "does
-the filing name Google or Amazon?" and a system running on world knowledge says
-yes. The right answer is no.
-
-Every quote gets string-matched against the source, so fabrication is caught
-mechanically. No LLM grading another LLM.
-
-The harness has caught three real problems, and none of them were the model:
-
-**My answer key was wrong.** A question I'd marked "should abstain" failed. The
-model had correctly found Microsoft's $28.9B IRS transfer pricing contingency,
-which proved my assumption that risk factors are purely qualitative was false.
-
-**My grounding checker had false positives.** Report grounding sat at 60%. I
-bisected a supposedly fabricated quote character by character and found the whole
-failure was one trailing period, where the model closed a sentence that the filing
-continued. Forgiving terminal punctuation while staying strict about everything
-else took grounding from 60% to 100%.
-
-**The metric isn't deterministic.** Re-running the same question gives different
-quotes. Grounding rate is a sample, not a fixed property, so the honest number is a
-range across runs.
+An LLM asked "does Microsoft compete with Google?" will answer yes — from
+training data, not from the document in front of it. That answer is plausible,
+unsourced, and useless for research. Moat is built around removing that failure
+mode: the model must support every claim with a verbatim quote, and a string
+matcher checks each one against the filing. A quote either appears in the
+document or it does not.
 
 ## Architecture
 
 ```
-                    SEC EDGAR                     Market data
-         ┌──────────────┴──────────────┐               │
-  companyfacts API              submissions +      yfinance
-  (XBRL numbers)                filing HTML       (price only)
-         │                              │               │
-   ingest.py                       filings.py       prices.py
- - ticker → CIK                - 8MB HTML → 69K
- - Q4 derivation               - Item 1A extraction
- - tag fallbacks
-         │                              │
-         ▼                              ▼
-   PostgreSQL                      analysis.py
- companies · financials        - grounded prompting
- briefs · reports              - quote verification
-         │                              │
-   metrics.py → scoring.py              │
- - null-safe ratios  - 6 checks         │
- - TTM aggregation   - PASS/FAIL/UNKNOWN│
-         └──────────────┬───────────────┘
-                        ▼
-                    report.py
-        computed figures + filing → LLM synthesis
-                        ▼
-                     FastAPI
+Browser ──▶ FastAPI ──┬──▶ EDGAR XBRL API      numbers  ──▶ Postgres
+                      ├──▶ EDGAR filing HTML   Item 1A prose
+                      ├──▶ yfinance            market price
+                      └──▶ Claude              narrative ──▶ grounding check
 ```
 
-Plus Alembic migrations, environment-based config, 100+ tests, Docker Compose, and
-GitHub Actions CI.
+A request for an uncached ticker fans the three upstream fetches out in
+parallel, stores the financials, computes every metric in Python, and only then
+asks the model to interpret the finished figures. The page streams: computed
+figures appear in about a second, the narrative when the model finishes.
 
-## Some decisions worth explaining
+```
+moat/          application package
+  main.py        HTTP routes, caching, rate limiting
+  pipeline.py    the build as a sequence of progress events
+  ingest.py      EDGAR XBRL → quarterly financials
+  filings.py     10-K fetch and Item 1A extraction
+  analysis.py    grounding: quote verification
+  report.py      synthesis prompt and narrative assembly
+  scoring.py     the six-criterion scorecard
+  metrics.py     margins, ROE, ROIC, TTM
+  views.py       server-rendered HTML, no framework
+tests/         479 tests, ~3s, no network
+evals/         two evaluation harnesses + a pinned filing fixture
+migrations/    alembic
+scripts/       one-off probes and the cold-start timing harness
+```
 
-**Missing data is never zero.** It's `None` all the way through: nullable columns,
-ratios that return nothing when inputs are absent, an UNKNOWN state on the
-scorecard that's separate from FAIL, and a model required to say "not addressed."
-A made-up number looks exactly like a real one downstream. A null doesn't.
+## Engineering decisions worth explaining
 
-**The model never does arithmetic.** Every figure is computed in code before the
-LLM is called, and the prompt tells it not to calculate. If you hand a model raw
-filings and ask for ROIC, you get a plausible number with no provenance. Math
-belongs in code. Judgment about what the math means is what the model is for.
+**Grounding is a string match, not a judgement.** `analysis.check_quote`
+compacts whitespace and folds typographic punctuation, then asks whether the
+quote appears in the source. It forgives how a filing is typeset — filers split
+words across HTML tags, and a model copying a passage types `"` where the
+document has `"` — and forgives nothing about content. An empty quote returns
+`False`: `"" in source` is true for every source, and a verifier that reports
+success when it has verified nothing is worse than no verifier.
 
-**No embeddings for this part.** 10-K sections are required by regulation, so Item
-1A is always the risk factors. I slice it directly instead of embedding 8MB and
-hoping vector search lands on the right passage. That's a 99% context reduction and
-there's no retrieval step to go wrong. Embeddings make sense for free-form
-questions across a whole filing, which is the next layer.
+**The model narrates, it never calculates.** Every figure is computed from filed
+data before the prompt is built, and handed over as a number. Asking a model for
+ROIC produces a plausible figure with no provenance; giving it one produces
+interpretation that can be audited against arithmetic.
 
-**Every verdict names what would change it.** A rating with no falsification
-condition is a horoscope.
+**Unknown is not zero.** A company that did not report a line item has no value
+for it. That absence survives ingestion, the metrics, the scorecard (`UNKNOWN`,
+not `FAIL`), the JSON, and the page, where it renders as an em-dash. A missing
+figure and a zero look different at every layer.
 
-## Endpoints
+**Two evaluations, deliberately separate.** `evals/evaluate.py` measures the
+*model* against 24 questions with known answers, including traps that should be
+declined; it costs API credits and is sampled, so it cannot be deterministic.
+`evals/grounding_replay.py` measures the *verifier* by replaying recorded
+responses through the real code path against a pinned filing — free, offline,
+deterministic, and run in CI on every push. The split exists because the
+verifier is the part that has to be right.
 
-| Endpoint | Returns |
-|---|---|
-| `/` | Landing page — type a ticker, go to its tearsheet |
-| `/company/{ticker}/report/view` | The full report as an HTML tearsheet |
-| `/company/{ticker}/report` | The same analysis, as JSON, with verdict |
-| `/company/{ticker}/metrics` | Quarterly ratios and TTM aggregates |
-| `/company/{ticker}/brief` | Grounded answer to any question about the 10-K |
-| `/company/{ticker}/financials` | Raw quarterly data |
-| `/company/{ticker}` | Company record |
-| `/companies` | Everything ingested so far |
-| `/health` | Liveness check |
+**The page streams its own construction.** A cold ticker takes ~30s, almost all
+of it the model writing. Rather than hold a blank document open, the server
+answers immediately with a skeleton sized to the real content and pushes
+Server-Sent Events as each stage lands. Worst-case layout shift is 3px,
+measured in a browser.
 
-Interactive API docs are at `/docs` (FastAPI's generated OpenAPI UI).
-
-A ticker you've never requested gets ingested live and served instantly after
-that. Reports cache for 7 days (they include a live price); briefs are cached
-until the company files a newer 10-K, which is checked against the submissions
-index rather than on a timer. `?refresh=true` forces a rebuild of either, and
-can be put behind `REFRESH_TOKEN` so a public deployment isn't handing out a
-free lever on a paid endpoint.
+**Degrade, never freeze.** A failed synthesis returns the computed figures with
+the narrative marked absent — and is deliberately *not* cached, so the next
+request retries instead of serving a verdict-less report for the full 7-day TTL.
 
 ## Running it
 
 ```bash
+cp .env.example .env          # then set DATABASE_URL and ANTHROPIC_API_KEY
 docker compose up --build
-docker compose exec api python ingest.py MSFT
-# http://localhost:8000/docs
-# Migrations run automatically on container start.
+open http://localhost:8000
 ```
 
-Put an `ANTHROPIC_API_KEY` in `.env` for the AI endpoints. See `.env.example`.
+Migrations run automatically on container start.
 
 <details>
 <summary>Without Docker</summary>
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt   # requirements.txt alone for runtime
+pip install -r requirements-dev.txt
 createdb moat && createdb moat_test
-cp .env.example .env
-# Then edit .env: set DATABASE_URL to your local Postgres (replace USER with
-# your username). TEST_DATABASE_URL can be left blank — it falls back to a
-# sensible default.
+cp .env.example .env          # set DATABASE_URL; TEST_DATABASE_URL may stay blank
 alembic upgrade head
-python ingest.py MSFT
-uvicorn main:app --reload
+python -m scripts.edgar_probe             # optional: check EDGAR is reachable
+uvicorn moat.main:app --reload
 ```
-
-Tests: `pytest` — 313 of them, in about 1.5 seconds. They use an isolated test
-database (`TEST_DATABASE_URL`) and mock every upstream, so no
-`ANTHROPIC_API_KEY` and no network are needed; a test that reaches the network
-fails with a message saying which boundary to mock.
-
-Two evaluations, deliberately separate:
-
-- `python grounding_replay.py` — replays recorded model responses through the
-  real grounding path against a pinned filing. Free, offline, deterministic,
-  and runs in CI on every push. It measures the *verifier*.
-- `python evaluate.py` — asks the live model 24 questions about Microsoft's
-  FY2025 risk factors and grades abstention, grounding and hallucinations.
-  Costs a few cents and needs a key. It measures the *model*. Exits non-zero
-  if any quote fails to verify.
 </details>
 
-## The data problems that took the longest
+## Tests and evaluations
 
-**Q4 doesn't exist.** Companies don't file a standalone fourth quarter. It's buried
-inside the annual figure. The clue was that income statement items were missing
-while balance sheet items were fine, which is the difference between activity over
-a period and a balance at a moment. So I split the tags accordingly, found annual
-entries by their ~365 day duration (calendar frames don't work for companies whose
-fiscal year isn't the calendar year), and computed Q4 = FY − (Q1+Q2+Q3). Only when
-all three other quarters exist. No estimating. Checked it against the real number:
-Microsoft's FY2025 Q4 revenue is $76.4B.
+```bash
+pytest                          # 479 tests, ~3s, no network, no API key
+python -m evals.grounding_replay # offline grounding eval — free, deterministic
+python -m evals.evaluate         # paid eval against the live model
+```
 
-**Accounting standards change.** Revenue lives under a different GAAP tag before
-and after ASC 606, so anything before ~2016 came back empty. Each metric now maps
-to an ordered list of candidate tags, preferring the modern one and falling back
-for history.
+`pytest` mocks every upstream; a test that reaches the network fails with a
+message naming the boundary it should have mocked. `grounding_replay` exits
+non-zero if any recorded response reaches the wrong verdict. `evaluate` exits 0
+when its hard gates hold, 1 when a quote fails verification, and 2 when it could
+not run at all — a billing failure must not look like a grounding regression.
 
-**Re-running has to be safe.** Ingestion upserts on a composite unique constraint,
-enforced in both the code and the database, so running it again refreshes rows
-instead of duplicating them.
+## Endpoints
+
+| Route | |
+|---|---|
+| `/` | Search |
+| `/company/{ticker}/report/view` | The report, streamed as it builds |
+| `/company/{ticker}/report` | The same analysis as JSON |
+| `/company/{ticker}/report/stream` | Server-Sent Events driving the page above |
+| `/company/{ticker}` | Company record |
+| `/company/{ticker}/brief?question=` | Grounded answer to any question about the 10-K |
+| `/company/{ticker}/metrics` | Quarterly ratios and TTM aggregates |
+| `/company/{ticker}/financials` | Raw quarterly data |
+| `/companies` | Known companies, paginated |
+| `/health` | Liveness, including a database check |
+| `/docs` | Generated OpenAPI |
 
 ## Tech
 
 Python 3.12, FastAPI, PostgreSQL 16, SQLAlchemy 2, Alembic, Anthropic API,
-BeautifulSoup, Docker, pytest, ruff, GitHub Actions.
+BeautifulSoup, Docker, pytest, ruff, GitHub Actions. No frontend framework —
+the HTML is server-rendered and the only JavaScript is the ~40 lines that drive
+the progress stream, the theme toggle and the search shortcuts.
 
 ## What it doesn't do
 
-- **Banks and insurers.** They file under a different GAAP taxonomy (interest
-  income instead of revenue, deposits instead of debt). Rather than force it, the
-  pipeline reports honest gaps. About 85% of the S&P 500 is non-financial.
-- **Proper ROIC.** Mine uses TTM net income over gross debt plus equity. The real
-  version uses NOPAT and nets out excess cash. Directionally right, noted in the
-  code.
-- **Real time anything.** Data updates when companies file, which is quarterly.
-  That's fine for this kind of analysis.
-- **Tell you what to buy.** It's a screen. Valuation multiples get reported without
-  a threshold attached, because deciding what counts as expensive takes judgment
-  the system doesn't have.
-
-## Roadmap
-
-- [x] EDGAR ingestion for any US company, on demand
-- [x] Value metrics: margins, ROE, D/E, TTM, ROIC
-- [x] 10-K extraction and grounded analysis
-- [x] Evaluation harness with hallucination traps
-- [x] Scoring framework and full report
-- [x] Caching with per-endpoint invalidation
-- [x] Cumulative-filer interim quarters recovered by differencing the YTD chain
-- [ ] Vector search for free-form questions (chunking and embeddings are written
-      and tested, pgvector storage is not; the ~850MB of ML dependencies are not
-      installed by default — see the note in `requirements.txt`)
-- [x] Deployed somewhere
-- [ ] Ranking across a universe of companies
+- **Banks and insurers.** They file under a different GAAP taxonomy. Rather than
+  force it, the pipeline reports honest gaps.
+- **Vector search over filings.** Item 1A is sliced out by document structure,
+  which is exact and costs nothing. Semantic retrieval was prototyped and
+  removed; see the note in `moat/models.py`.
+- **Proper ROIC.** This uses TTM net income over gross debt plus equity. The
+  textbook version uses NOPAT and nets out excess cash. Directionally right,
+  and flagged in the code.
+- **Tell you what to buy.** It is a screen against stated criteria. Valuation
+  multiples are reported without a threshold, because what counts as expensive
+  takes judgement the system does not have.

@@ -80,7 +80,7 @@ jobs:
       # is checked on every push rather than only when someone spends money on
       # evaluate.py. See grounding_replay.py for the split.
       - name: Grounding replay
-        run: python grounding_replay.py
+        run: python -m evals.grounding_replay
 
   docker:
     runs-on: ubuntu-latest

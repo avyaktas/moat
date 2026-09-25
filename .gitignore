@@ -1,8 +1,29 @@
+# Virtualenvs
 .venv/
-__pycache__/
-*.pyc
-.env
+venv/
 
-# Personal interview-prep / handoff docs — kept local, not part of the repo
+# Python bytecode and tooling caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Secrets. .env.example is committed and documents the shape; .env never is.
+.env
+.env.*
+!.env.example
+
+# Logs and local scratch output
+*.log
+
+# OS and editor droppings
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Personal interview-prep / handoff docs - kept local, not part of the repo
 PROJECT_GUIDE.md
 HANDOFF.md
