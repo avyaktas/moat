@@ -52,7 +52,7 @@ class TTLCache:
             if time.monotonic() - stored_at >= self.ttl_seconds:
                 del self._data[key]
                 return default
-            self._data.move_to_end(key)   # mark as recently used
+            self._data.move_to_end(key)  # mark as recently used
             return value
 
     def has(self, key: str) -> bool:
@@ -65,7 +65,7 @@ class TTLCache:
             self._data[key] = (time.monotonic(), value)
             self._data.move_to_end(key)
             while len(self._data) > self.max_entries:
-                self._data.popitem(last=False)   # evict least recently used
+                self._data.popitem(last=False)  # evict least recently used
 
     def clear(self) -> None:
         with self._lock:

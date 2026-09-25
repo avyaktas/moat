@@ -52,8 +52,9 @@ class Prefetched:
     errors: dict[str, BaseException] = field(default_factory=dict)
 
 
-def prefetch(ticker: str, *, need_financials: bool, fetch_financials,
-             fetch_filing, fetch_price) -> Prefetched:
+def prefetch(
+    ticker: str, *, need_financials: bool, fetch_financials, fetch_filing, fetch_price
+) -> Prefetched:
     """Run the independent upstream fetches concurrently.
 
     The three callables are injected rather than imported so this stays
@@ -76,18 +77,16 @@ def prefetch(ticker: str, *, need_financials: bool, fetch_financials,
             # bind_context so stage() inside a worker still records against
             # this request's breakdown. Copying the context inside the worker
             # would capture the worker's own empty one and record nothing.
-            futures = {
-                pool.submit(timing.bind_context(fn)): name
-                for name, fn in jobs.items()
-            }
+            futures = {pool.submit(timing.bind_context(fn)): name for name, fn in jobs.items()}
             for future in concurrent.futures.as_completed(futures):
                 name = futures[future]
                 try:
                     value = future.result()
                 except BaseException as exc:  # noqa: BLE001 - re-raised below
                     result.errors[name] = exc
-                    logger.warning("prefetch %s failed for %s: %s: %s",
-                                   name, ticker, type(exc).__name__, exc)
+                    logger.warning(
+                        "prefetch %s failed for %s: %s: %s", name, ticker, type(exc).__name__, exc
+                    )
                     continue
                 if name == "financials":
                     _cik, result.name, result.series = value
@@ -123,7 +122,7 @@ class Stage:
 
     key: str
     label: str
-    state: str                      # running | done | skipped | failed
+    state: str  # running | done | skipped | failed
     seconds: float | None = None
     detail: str | None = None
 

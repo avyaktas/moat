@@ -77,9 +77,7 @@ class Timings:
         parts = []
         for (name, seconds), depth in zip(self.stages, self.depths, strict=True):
             parts.append(f"{'.' * depth}{name}={seconds:.2f}s")
-        accounted = sum(
-            s for (_, s), d in zip(self.stages, self.depths, strict=True) if d == 0
-        )
+        accounted = sum(s for (_, s), d in zip(self.stages, self.depths, strict=True) if d == 0)
         parts.append(f"other={max(0.0, total - accounted):.2f}s")
         return f"total={total:.2f}s " + " ".join(parts)
 

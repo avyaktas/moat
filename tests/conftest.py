@@ -116,6 +116,7 @@ def _no_network(monkeypatch):
     stubbed upstream still mocks at the level it cares about; this only fires
     when nothing mocked anything.
     """
+
     def _blocked(*args, **kwargs):
         raise RuntimeError(
             "This test tried to make a real network request. Mock the "

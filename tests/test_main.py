@@ -12,15 +12,18 @@ def test_health(client):
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
+
 def test_get_company(client):
     response = client.get("/company/MSFT")
     assert response.status_code == 200
     assert response.json()["ticker"] == "MSFT"
 
+
 def test_company_lowercase(client):
     response = client.get("/company/msft")
     assert response.status_code == 200
     assert response.json()["ticker"] == "MSFT"
+
 
 def test_unknown_ticker_404s_without_network(client, monkeypatch):
     """Renamed from test_get_company_not_found, which was defined twice in
@@ -34,6 +37,7 @@ def test_unknown_ticker_404s_without_network(client, monkeypatch):
     response = client.get("/company/FAKE")
     assert response.status_code == 404
 
+
 def test_get_financials_empty(client):
     response = client.get("/company/MSFT/financials")
     assert response.status_code == 200
@@ -43,10 +47,12 @@ def test_get_financials_empty(client):
 def _raise_unknown(ticker):
     raise ValueError(f"Unknown ticker: {ticker}")
 
+
 def test_get_company_not_found(client, monkeypatch):
     monkeypatch.setattr("moat.ingest.get_cik", _raise_unknown)
     response = client.get("/company/FAKE")
     assert response.status_code == 404
+
 
 def test_landing_page_served_at_root(client):
     resp = client.get("/")
@@ -67,7 +73,7 @@ def test_company_404_returns_html_page(client, monkeypatch):
     assert resp.status_code == 404
     assert resp.headers["content-type"].startswith("text/html")
     assert "Not found" in resp.text
-    assert 'href="/"' in resp.text          # a way back to search
+    assert 'href="/"' in resp.text  # a way back to search
 
 
 def test_non_company_404_stays_json(client):
@@ -126,9 +132,14 @@ def _fake_report_data(rows, price_data):
     return {
         "as_of": "2025-06-30",
         "ttm": {
-            "revenue": 100.0, "net_income": 30.0, "free_cash_flow": 25.0,
-            "net_margin": 0.30, "fcf_margin": 0.25, "roe": 0.075,
-            "roic": 0.068, "revenue_growth": 0.0,
+            "revenue": 100.0,
+            "net_income": 30.0,
+            "free_cash_flow": 25.0,
+            "net_margin": 0.30,
+            "fcf_margin": 0.25,
+            "roe": 0.075,
+            "roic": 0.068,
+            "revenue_growth": 0.0,
         },
         "price": None,
         "scorecard": {
@@ -200,6 +211,7 @@ def test_report_survives_anthropic_outage(client, monkeypatch):
     finally:
         db.close()
 
+
 def test_report_not_cached_when_synthesis_returns_bad_json(client, monkeypatch):
     """A model reply that will not parse must degrade, not freeze.
 
@@ -250,6 +262,7 @@ def test_report_survives_anthropic_connection_error(client, monkeypatch):
     original `except APIStatusError` never caught it and a transient network
     blip to Anthropic 500'd the whole report instead of degrading it.
     """
+
     def _raise_conn(*a, **k):
         raise _connection_error()
 
@@ -362,6 +375,7 @@ def test_synthesis_succeeding_on_retry_is_cached(client, monkeypatch):
 #
 # The handler matched every path under /company/, so the JSON endpoints
 # answered 404 with an HTML page. An API client asking for JSON got markup.
+
 
 def test_json_report_404_stays_json(client, monkeypatch):
     monkeypatch.setattr("moat.ingest.get_cik", _raise_unknown)
@@ -498,12 +512,18 @@ def _seed_brief(question: str, report_date: str, answer: str = "cached answer"):
     db = TestingSessionLocal()
     try:
         company = db.query(Company).filter(Company.ticker == "MSFT").one()
-        db.add(BriefModel(
-            company_id=company.id, question=question, answer=answer,
-            addressed=True, quotes=json.dumps(["We face intense competition."]),
-            grounding_rate=1.0, filing_url="https://example.com/old.htm",
-            report_date=report_date,
-        ))
+        db.add(
+            BriefModel(
+                company_id=company.id,
+                question=question,
+                answer=answer,
+                addressed=True,
+                quotes=json.dumps(["We face intense competition."]),
+                grounding_rate=1.0,
+                filing_url="https://example.com/old.htm",
+                report_date=report_date,
+            )
+        )
         db.commit()
     finally:
         db.close()
@@ -511,29 +531,43 @@ def _seed_brief(question: str, report_date: str, answer: str = "cached answer"):
 
 def _patch_brief_boundaries(monkeypatch, report_date: str, answers: list):
     """Stub the SEC and the LLM; `answers` records each analysis call."""
+
     def _answer(question, source_text, client=None):
         answers.append(question)
         return {
-            "addressed": True, "answer": "freshly generated",
+            "addressed": True,
+            "answer": "freshly generated",
             "quotes": ["We face intense competition."],
-            "quote_checks": [True], "grounding_rate": 1.0, "raw": "{}",
+            "quote_checks": [True],
+            "grounding_rate": 1.0,
+            "raw": "{}",
         }
 
     monkeypatch.setattr("moat.main.get_cik", lambda t: ("789019", "Microsoft"))
     monkeypatch.setattr("moat.main.answer_question", _answer)
-    monkeypatch.setattr("moat.main.get_risk_factors", lambda cik: {
-        "text": "ITEM 1A. RISK FACTORS We face intense competition.",
-        "url": "https://example.com/new.htm",
-        "filing_date": "2026-07-29", "report_date": report_date,
-    })
-    monkeypatch.setattr("moat.main.find_latest_10k", lambda cik: {
-        "url": "https://example.com/new.htm", "filing_date": "2026-07-29",
-        "report_date": report_date, "accession": "x",
-    })
+    monkeypatch.setattr(
+        "moat.main.get_risk_factors",
+        lambda cik: {
+            "text": "ITEM 1A. RISK FACTORS We face intense competition.",
+            "url": "https://example.com/new.htm",
+            "filing_date": "2026-07-29",
+            "report_date": report_date,
+        },
+    )
+    monkeypatch.setattr(
+        "moat.main.find_latest_10k",
+        lambda cik: {
+            "url": "https://example.com/new.htm",
+            "filing_date": "2026-07-29",
+            "report_date": report_date,
+            "accession": "x",
+        },
+    )
 
 
 def test_brief_cache_hit_when_filing_unchanged(client, monkeypatch):
     from moat.main import DEFAULT_QUESTION
+
     _seed_brief(DEFAULT_QUESTION, "2025-06-30")
     answers = []
     _patch_brief_boundaries(monkeypatch, "2025-06-30", answers)
@@ -547,6 +581,7 @@ def test_brief_cache_hit_when_filing_unchanged(client, monkeypatch):
 def test_brief_regenerates_when_a_newer_10k_is_filed(client, monkeypatch):
     """The regression: a brief pinned to a superseded filing, served forever."""
     from moat.main import DEFAULT_QUESTION
+
     _seed_brief(DEFAULT_QUESTION, "2025-06-30")
     answers = []
     _patch_brief_boundaries(monkeypatch, "2026-06-30", answers)
@@ -561,6 +596,7 @@ def test_brief_regenerates_when_a_newer_10k_is_filed(client, monkeypatch):
 
 def test_brief_refresh_forces_regeneration(client, monkeypatch):
     from moat.main import DEFAULT_QUESTION
+
     _seed_brief(DEFAULT_QUESTION, "2025-06-30")
     answers = []
     _patch_brief_boundaries(monkeypatch, "2025-06-30", answers)
@@ -574,6 +610,7 @@ def test_brief_refresh_forces_regeneration(client, monkeypatch):
 def test_brief_still_served_when_freshness_check_fails(client, monkeypatch):
     """If the SEC is unreachable, a cached brief beats no brief at all."""
     from moat.main import DEFAULT_QUESTION
+
     _seed_brief(DEFAULT_QUESTION, "2025-06-30")
     answers = []
     _patch_brief_boundaries(monkeypatch, "2025-06-30", answers)
@@ -691,8 +728,9 @@ def test_ordinary_question_still_works(client, monkeypatch):
     monkeypatch.setattr("moat.main.get_risk_factors", _fake_risk_factors)
     monkeypatch.setattr("moat.main.get_cik", lambda ticker: ("789019", "Microsoft"))
 
-    resp = client.get("/company/MSFT/brief",
-                      params={"question": "What are the main competitive risks?"})
+    resp = client.get(
+        "/company/MSFT/brief", params={"question": "What are the main competitive risks?"}
+    )
     assert resp.status_code == 200
 
 
@@ -841,11 +879,17 @@ def _seed_quarters(n: int):
         company = db.query(Company).filter(Company.ticker == "MSFT").one()
         for i in range(n):
             year, month = 2026 - (i // 4), [3, 6, 9, 12][i % 4]
-            db.add(Financials(
-                company_id=company.id, period_end=_date(year, month, 28),
-                revenue=100, net_income=30, free_cash_flow=25,
-                total_debt=40, shareholders_equity=400,
-            ))
+            db.add(
+                Financials(
+                    company_id=company.id,
+                    period_end=_date(year, month, 28),
+                    revenue=100,
+                    net_income=30,
+                    free_cash_flow=25,
+                    total_debt=40,
+                    shareholders_equity=400,
+                )
+            )
         db.commit()
     finally:
         db.close()
@@ -951,15 +995,21 @@ def test_companies_ordering_is_stable(client):
 
 # --- HTTP caching on the report routes ---
 
+
 def _cacheable_report(client, monkeypatch):
     """Generate and persist one report, returning its response."""
     monkeypatch.setattr("moat.main.get_cik", lambda t: ("789019", "Microsoft"))
     monkeypatch.setattr("moat.main.get_price", lambda t: None)
     monkeypatch.setattr("moat.main.build_report_data", _fake_report_data)
     monkeypatch.setattr("moat.main.get_risk_factors", _fake_risk_factors)
-    monkeypatch.setattr("moat.main.synthesize", lambda *a, **k: {
-        "verdict": "WATCH-CASE", "risks": [], "grounding_rate": 1.0,
-    })
+    monkeypatch.setattr(
+        "moat.main.synthesize",
+        lambda *a, **k: {
+            "verdict": "WATCH-CASE",
+            "risks": [],
+            "grounding_rate": 1.0,
+        },
+    )
     return client.get("/company/MSFT/report")
 
 
@@ -985,8 +1035,7 @@ def test_matching_etag_returns_304(client, monkeypatch):
 
 def test_stale_etag_returns_the_report(client, monkeypatch):
     _cacheable_report(client, monkeypatch)
-    resp = client.get("/company/MSFT/report",
-                      headers={"If-None-Match": '"not-the-right-etag"'})
+    resp = client.get("/company/MSFT/report", headers={"If-None-Match": '"not-the-right-etag"'})
     assert resp.status_code == 200
     assert resp.json()["company"] == "MSFT"
 
@@ -1019,8 +1068,9 @@ def test_view_route_also_supports_conditional_requests(client, monkeypatch):
     assert first.status_code == 200
     assert first.headers.get("ETag")
 
-    second = client.get("/company/MSFT/report/view",
-                        headers={"If-None-Match": first.headers["ETag"]})
+    second = client.get(
+        "/company/MSFT/report/view", headers={"If-None-Match": first.headers["ETag"]}
+    )
     assert second.status_code == 304
 
 
@@ -1064,9 +1114,12 @@ def _api_status_error(status: int):
         status, request=_httpx.Request("POST", "https://api.anthropic.com/v1/messages")
     )
     mapping = {
-        400: anthropic.BadRequestError, 401: anthropic.AuthenticationError,
-        403: anthropic.PermissionDeniedError, 404: anthropic.NotFoundError,
-        422: anthropic.UnprocessableEntityError, 429: anthropic.RateLimitError,
+        400: anthropic.BadRequestError,
+        401: anthropic.AuthenticationError,
+        403: anthropic.PermissionDeniedError,
+        404: anthropic.NotFoundError,
+        422: anthropic.UnprocessableEntityError,
+        429: anthropic.RateLimitError,
         500: anthropic.InternalServerError,
     }
     cls = mapping.get(status, anthropic.APIStatusError)
@@ -1115,9 +1168,7 @@ def test_transient_status_is_retried(client, monkeypatch, status):
 
 
 def test_connection_error_is_retried(client, monkeypatch):
-    _, attempts, _ = _count_synthesis_attempts(
-        client, monkeypatch, _connection_error
-    )
+    _, attempts, _ = _count_synthesis_attempts(client, monkeypatch, _connection_error)
     assert attempts == 2
 
 
@@ -1221,37 +1272,40 @@ def _stage_keys(events):
 
 
 def test_events_arrive_in_pipeline_order(client, monkeypatch):
-    events = _drive(client, monkeypatch,
-                    synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
-    assert _stage_keys(events) == ["fetch", "fetch", "store", "metrics",
-                                   "metrics", "synthesis", "synthesis"]
+    events = _drive(client, monkeypatch, synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
+    assert _stage_keys(events) == [
+        "fetch",
+        "fetch",
+        "store",
+        "metrics",
+        "metrics",
+        "synthesis",
+        "synthesis",
+    ]
 
 
 def test_a_known_company_skips_the_store_stage(client, monkeypatch):
     """MSFT is seeded, so there is nothing to ingest."""
-    events = _drive(client, monkeypatch,
-                    synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
-    store = [e for e in events if isinstance(e, pipeline_module.Stage)
-             and e.key == "store"]
+    events = _drive(client, monkeypatch, synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
+    store = [e for e in events if isinstance(e, pipeline_module.Stage) and e.key == "store"]
     assert [e.state for e in store] == ["skipped"]
 
 
 def test_partial_arrives_before_synthesis_starts(client, monkeypatch):
     """The whole point: figures on the page while the model is still writing."""
-    events = _drive(client, monkeypatch,
-                    synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
+    events = _drive(client, monkeypatch, synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
     kinds = [type(e).__name__ for e in events]
     partial_at = kinds.index("Partial")
     synthesis_at = next(
-        i for i, e in enumerate(events)
+        i
+        for i, e in enumerate(events)
         if isinstance(e, pipeline_module.Stage) and e.key == "synthesis"
     )
     assert partial_at < synthesis_at
 
 
 def test_partial_carries_the_computed_figures_and_no_narrative(client, monkeypatch):
-    events = _drive(client, monkeypatch,
-                    synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
+    events = _drive(client, monkeypatch, synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
     partial = next(e for e in events if isinstance(e, pipeline_module.Partial))
     assert partial.payload["narrative"] is None
     assert partial.payload["data"]["ttm"]["revenue"] == 100.0
@@ -1259,8 +1313,7 @@ def test_partial_carries_the_computed_figures_and_no_narrative(client, monkeypat
 
 
 def test_result_is_the_last_event(client, monkeypatch):
-    events = _drive(client, monkeypatch,
-                    synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
+    events = _drive(client, monkeypatch, synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
     assert isinstance(events[-1], pipeline_module.Result)
     assert events[-1].payload["narrative"]["verdict"] == "BUY-CASE"
 
@@ -1270,8 +1323,7 @@ def test_synthesis_failure_marks_the_stage_failed_with_a_reason(client, monkeypa
         raise _api_status_error(429)
 
     events = _drive(client, monkeypatch, synth=_boom)
-    synth = [e for e in events if isinstance(e, pipeline_module.Stage)
-             and e.key == "synthesis"]
+    synth = [e for e in events if isinstance(e, pipeline_module.Stage) and e.key == "synthesis"]
     assert synth[-1].state == "failed"
     assert "rate limited" in synth[-1].detail
     assert events[-1].payload["narrative"] is None
@@ -1279,29 +1331,30 @@ def test_synthesis_failure_marks_the_stage_failed_with_a_reason(client, monkeypa
 
 def test_missing_filing_marks_synthesis_failed(client, monkeypatch):
     events = _drive(client, monkeypatch, filing=lambda cik: None)
-    synth = [e for e in events if isinstance(e, pipeline_module.Stage)
-             and e.key == "synthesis"]
+    synth = [e for e in events if isinstance(e, pipeline_module.Stage) and e.key == "synthesis"]
     assert synth[-1].state == "failed"
     assert "10-K" in synth[-1].detail
 
 
 def test_stages_report_how_long_they_took(client, monkeypatch):
-    events = _drive(client, monkeypatch,
-                    synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
-    done = [e for e in events if isinstance(e, pipeline_module.Stage)
-            and e.state == "done"]
+    events = _drive(client, monkeypatch, synth=lambda *a, **k: {"verdict": "BUY-CASE", "risks": []})
+    done = [e for e in events if isinstance(e, pipeline_module.Stage) and e.state == "done"]
     assert done and all(e.seconds is not None for e in done)
 
 
 # --- failure messages are for people ---
 
-@pytest.mark.parametrize("status,expected", [
-    (429, "rate limited"),
-    (401, "credentials"),
-    (403, "credentials"),
-    (400, "usage limit"),
-    (500, "unavailable"),
-])
+
+@pytest.mark.parametrize(
+    "status,expected",
+    [
+        (429, "rate limited"),
+        (401, "credentials"),
+        (403, "credentials"),
+        (400, "usage limit"),
+        (500, "unavailable"),
+    ],
+)
 def test_failure_detail_explains_the_cause(status, expected):
     assert expected in _synthesis_failure_detail(_api_status_error(status))
 
@@ -1323,6 +1376,7 @@ def test_unknown_failure_still_says_something():
 # Everything the reader sees during a cold build comes through here, so every
 # outcome - including every failure - has to arrive as an event.
 
+
 def _parse_sse(text: str) -> list[tuple[str, dict]]:
     """Return [(event, data)] from a text/event-stream body."""
     out = []
@@ -1332,16 +1386,15 @@ def _parse_sse(text: str) -> list[tuple[str, dict]]:
         name, data = None, None
         for line in block.splitlines():
             if line.startswith("event: "):
-                name = line[len("event: "):]
+                name = line[len("event: ") :]
             elif line.startswith("data: "):
-                data = json.loads(line[len("data: "):])
+                data = json.loads(line[len("data: ") :])
         if name:
             out.append((name, data))
     return out
 
 
-def _stream(client, monkeypatch, ticker="MSFT", synth=None,
-            filing=_fake_risk_factors):
+def _stream(client, monkeypatch, ticker="MSFT", synth=None, filing=_fake_risk_factors):
     monkeypatch.setattr("moat.main.get_cik", lambda t: ("789019", "Microsoft"))
     monkeypatch.setattr("moat.main.get_price", lambda t: None)
     monkeypatch.setattr("moat.main.build_report_data", _fake_report_data)
@@ -1349,8 +1402,7 @@ def _stream(client, monkeypatch, ticker="MSFT", synth=None,
     monkeypatch.setattr("moat.main.time.sleep", lambda s: None)
     monkeypatch.setattr(
         "moat.main.synthesize",
-        synth or (lambda *a, **k: {"verdict": "WATCH-CASE", "risks": [],
-                                   "grounding_rate": 1.0}),
+        synth or (lambda *a, **k: {"verdict": "WATCH-CASE", "risks": [], "grounding_rate": 1.0}),
     )
     resp = client.get(f"/company/{ticker}/report/stream")
     return resp, _parse_sse(resp.text)
@@ -1450,6 +1502,7 @@ def test_sec_outage_streams_a_failure(client, monkeypatch):
 
 def test_synthesis_failure_still_delivers_the_figures(client, monkeypatch):
     """A failed narrative must not cost the reader the computed data."""
+
     def _boom(*a, **k):
         raise _api_status_error(400)
 
@@ -1464,6 +1517,7 @@ def test_synthesis_failure_still_delivers_the_figures(client, monkeypatch):
 
 def test_an_unexpected_error_still_ends_the_stream(client, monkeypatch):
     """Nothing may escape a streaming response: the page would wait forever."""
+
     def _explode(*a, **k):
         raise RuntimeError("something nobody predicted")
 
@@ -1486,6 +1540,7 @@ def test_stream_is_rate_limited(client, monkeypatch):
 
 
 # --- the view route now serves a shell on a cold build ---
+
 
 def test_view_route_serves_the_shell_when_uncached(client, monkeypatch):
     monkeypatch.setattr("moat.main.get_cik", lambda t: ("789019", "Microsoft"))
@@ -1542,14 +1597,17 @@ def test_report_uses_the_committed_company_after_ingest(client, monkeypatch):
         return 1
 
     monkeypatch.setattr("moat.main.store_financials", _store)
-    monkeypatch.setattr("moat.main.fetch_financials",
-                        lambda t: ("789019", "Newco", {"net_income": {}}))
+    monkeypatch.setattr(
+        "moat.main.fetch_financials", lambda t: ("789019", "Newco", {"net_income": {}})
+    )
     monkeypatch.setattr("moat.main.get_cik", lambda t: ("789019", "Newco"))
     monkeypatch.setattr("moat.main.get_price", lambda t: None)
     monkeypatch.setattr("moat.main.build_report_data", _fake_report_data)
     monkeypatch.setattr("moat.main.get_risk_factors", _fake_risk_factors)
-    monkeypatch.setattr("moat.main.synthesize", lambda *a, **k: {
-        "verdict": "WATCH-CASE", "risks": [], "grounding_rate": 1.0})
+    monkeypatch.setattr(
+        "moat.main.synthesize",
+        lambda *a, **k: {"verdict": "WATCH-CASE", "risks": [], "grounding_rate": 1.0},
+    )
 
     resp = client.get("/company/NEWCO/report")
     assert resp.status_code == 200, resp.text

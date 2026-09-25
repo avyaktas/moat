@@ -34,7 +34,7 @@ import threading
 import time
 
 _lock = threading.Lock()
-_buckets: dict[str, tuple[float, float]] = {}   # key -> (tokens, last_seen)
+_buckets: dict[str, tuple[float, float]] = {}  # key -> (tokens, last_seen)
 
 
 def clear() -> None:

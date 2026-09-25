@@ -8,8 +8,7 @@ def setup_function():
 
 
 def test_allows_up_to_capacity():
-    assert all(ratelimit.allow("ip", capacity=3, refill_per_minute=60)
-               for _ in range(3))
+    assert all(ratelimit.allow("ip", capacity=3, refill_per_minute=60) for _ in range(3))
 
 
 def test_blocks_past_capacity():
@@ -37,7 +36,7 @@ def test_bucket_refills_over_time(monkeypatch):
         ratelimit.allow("ip", 3, refill_per_minute=60)
     assert ratelimit.allow("ip", 3, 60) is False
 
-    now[0] += 1.0          # 60/min = one token per second
+    now[0] += 1.0  # 60/min = one token per second
     assert ratelimit.allow("ip", 3, 60) is True
 
 
@@ -47,7 +46,7 @@ def test_refill_never_exceeds_capacity(monkeypatch):
     monkeypatch.setattr(ratelimit.time, "monotonic", lambda: now[0])
 
     ratelimit.allow("ip", 3, 60)
-    now[0] += 3600        # an hour idle
+    now[0] += 3600  # an hour idle
     assert all(ratelimit.allow("ip", 3, 60) for _ in range(3))
     assert ratelimit.allow("ip", 3, 60) is False, "burst capped at capacity"
 
@@ -58,7 +57,7 @@ def test_sustained_rate_holds(monkeypatch):
     monkeypatch.setattr(ratelimit.time, "monotonic", lambda: now[0])
 
     allowed = 0
-    for _ in range(600):          # 600 attempts, one every 0.1s = 60s total
+    for _ in range(600):  # 600 attempts, one every 0.1s = 60s total
         if ratelimit.allow("ip", capacity=5, refill_per_minute=60):
             allowed += 1
         now[0] += 0.1

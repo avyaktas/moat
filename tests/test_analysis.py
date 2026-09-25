@@ -59,11 +59,13 @@ def test_grounding_rate_none_when_no_quotes():
 def test_compact_removes_all_whitespace():
     assert compact("A  B\nC") == "abc"
 
+
 # --- the empty-quote hole ---
 #
 # `"" in anything` is True, so an empty or whitespace-only quote used to pass
 # the grounding check and count toward a 100% grounding rate. A quote that
 # carries no text cannot support a claim; it is absent, not verified.
+
 
 def test_check_quote_rejects_empty_quote():
     assert check_quote("", SOURCE) is False
@@ -138,7 +140,7 @@ def test_ellipsis_character_matches_three_periods():
 def test_the_reverse_direction_also_matches():
     """Source straight, quote curly - a model may typeset too."""
     source = 'The company\'s "platform" competitors'
-    assert check_quote('The company’s “platform” competitors', source) is True
+    assert check_quote("The company’s “platform” competitors", source) is True
 
 
 def test_bullets_are_treated_as_layout():
@@ -172,6 +174,7 @@ def test_normalize_preserves_typography_for_display():
 # quoting a filing has every reason to emit one: the passages it copies span
 # lines, and it writes the line break literally rather than escaping it. The
 # whole response is then discarded over a character that carries no meaning.
+
 
 def test_answer_question_parses_a_raw_newline_in_a_quote():
     from moat import analysis

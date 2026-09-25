@@ -1,30 +1,28 @@
-
-
 def net_margin(revenue: float | None, net_income: float | None) -> float | None:
     """Net income as a share of revenue. Returns None if revenue is missing
     or zero. Unknown is not the same as 0%."""
     if revenue is None or net_income is None or revenue == 0:
         return None
-    return net_income/revenue
-    
+    return net_income / revenue
+
 
 def fcf_margin(revenue: float | None, free_cash_flow: float | None) -> float | None:
-    """ Free cash flow as a share of revenue. Net income is an accounting opinion,
+    """Free cash flow as a share of revenue. Net income is an accounting opinion,
     cash is a fact. A gap between this and net_margin means earnings are
     not converting to cash. Returns None if revenue is missing or zero."""
     if revenue is None or revenue == 0 or free_cash_flow is None:
         return None
-    return free_cash_flow/revenue
+    return free_cash_flow / revenue
 
 
 def roe(net_income: float | None, shareholders_equity: float | None) -> float | None:
-    """ Return on equity: profit per dollar of owner capital.
+    """Return on equity: profit per dollar of owner capital.
     Returns None if equity is missing, zero, or negative. Negative equity
     makes ROE computable but meaningless: a loss on negative equity reads as
     a positive return."""
     if shareholders_equity is None or shareholders_equity <= 0 or net_income is None:
         return None
-    return net_income/shareholders_equity
+    return net_income / shareholders_equity
 
 
 def debt_to_equity(total_debt: float | None, shareholders_equity: float | None) -> float | None:
@@ -32,7 +30,7 @@ def debt_to_equity(total_debt: float | None, shareholders_equity: float | None) 
     zero, or negative."""
     if shareholders_equity is None or shareholders_equity <= 0 or total_debt is None:
         return None
-    return total_debt/shareholders_equity
+    return total_debt / shareholders_equity
 
 
 def ttm(values: list[float | None]) -> float | None:
@@ -44,18 +42,20 @@ def ttm(values: list[float | None]) -> float | None:
         return None
     return sum(values)
 
-def roic(ttm_net_income: float | None, total_debt: float | None,
-         shareholders_equity: float | None) -> float | None:
+
+def roic(
+    ttm_net_income: float | None, total_debt: float | None, shareholders_equity: float | None
+) -> float | None:
     """Return on invested capital: TTM income over (debt+equity).
     How much this company earns per dollar of total capital entrusted to it.
     Uses TTM income against current invested capital.
     Returns None if income is missing or invested capital is missing/ < 0.
     Proper ROIC uses NOPAT (operating profit after tax) and subtracts excess
     cash from invested capital."""
-    
+
     if ttm_net_income is None or total_debt is None or shareholders_equity is None:
         return None
     invested = total_debt + shareholders_equity
     if invested <= 0:
         return None
-    return ttm_net_income/invested
+    return ttm_net_income / invested

@@ -20,6 +20,7 @@ from moat.scoring import (
 
 # --- ROIC ---
 
+
 def test_roic_passes_above_threshold():
     assert check_roic(0.275).passed is True
 
@@ -36,6 +37,7 @@ def test_roic_unknown_when_missing():
 
 # --- Margin level ---
 
+
 def test_margin_level_passes():
     assert check_margin_level(0.39).passed is True
 
@@ -49,6 +51,7 @@ def test_margin_level_negative_fails():
 
 
 # --- Margin stability ---
+
 
 def test_margin_stability_passes_when_tight():
     assert check_margin_stability([0.35, 0.37, 0.34, 0.36]).passed is True
@@ -68,6 +71,7 @@ def test_margin_stability_ignores_nulls():
 
 
 # --- FCF quality ---
+
 
 def test_fcf_conversion_passes():
     assert check_fcf_quality(90.0, 100.0).passed is True
@@ -89,6 +93,7 @@ def test_fcf_conversion_unknown_when_missing():
 
 # --- Leverage ---
 
+
 def test_leverage_passes_when_conservative():
     assert check_leverage(0.10).passed is True
 
@@ -105,6 +110,7 @@ def test_leverage_detail_flags_red_zone():
 
 # --- Rule of 40 ---
 
+
 def test_rule_of_40_passes():
     # 18% growth + 23% FCF margin = 41
     assert rule_of_40(0.18, 0.23).passed is True
@@ -119,6 +125,7 @@ def test_rule_of_40_unknown_when_missing():
 
 
 # --- Survivability ---
+
 
 def test_survivability_self_funding():
     s = survivability(cash=32.0, investments=46.0, total_debt=40.0, ttm_fcf=72.0)
@@ -149,6 +156,7 @@ def test_survivability_unknown_when_missing():
 
 # --- Valuation ---
 
+
 def test_valuation_computes_multiples():
     v = valuation_ratios(market_cap=1000.0, ttm_fcf=50.0, ttm_net_income=100.0)
     assert v["p_fcf"] == 20.0
@@ -168,6 +176,7 @@ def test_valuation_none_without_market_cap():
 
 # --- Financial health table ---
 
+
 def test_health_table_computes_change():
     t = financial_health_table(
         current={"cash": 32.0, "total_debt": 40.0},
@@ -183,6 +192,7 @@ def test_health_table_handles_missing():
 
 
 # --- Scorecard assembly ---
+
 
 def test_scorecard_counts_outcomes():
     sc = build_scorecard(
@@ -231,11 +241,20 @@ def test_scorecard_reports_unknowns_separately():
 
 def test_scorecard_serializes():
     sc = build_scorecard(
-        roic=0.275, net_margin=0.39, historical_margins=[0.35, 0.37, 0.34],
-        ttm_fcf=72.0, ttm_net_income=125.0, debt_to_equity=0.10,
-        revenue_growth=0.18, fcf_margin=0.23, cash=32.0, investments=46.0,
-        total_debt=40.0, market_cap=2900.0,
-        current_period={"cash": 32.0}, prior_period={"cash": 28.0},
+        roic=0.275,
+        net_margin=0.39,
+        historical_margins=[0.35, 0.37, 0.34],
+        ttm_fcf=72.0,
+        ttm_net_income=125.0,
+        debt_to_equity=0.10,
+        revenue_growth=0.18,
+        fcf_margin=0.23,
+        cash=32.0,
+        investments=46.0,
+        total_debt=40.0,
+        market_cap=2900.0,
+        current_period={"cash": 32.0},
+        prior_period={"cash": 28.0},
     )
     d = sc.to_dict()
     assert d["summary"]["passed"] == 5

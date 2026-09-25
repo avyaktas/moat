@@ -196,8 +196,8 @@ QUESTIONS = [
         # figures. Tests over-claiming on quantification.
         "id": 25,
         "question": "Does the filing quantify the potential dollar impact of any specific risk?",
-        "category": "answerable",          # was "absent"
-        "should_abstain": False,           # was True
-        "key_terms": ["28.9"],             # the specific figure a correct answer cites
+        "category": "answerable",  # was "absent"
+        "should_abstain": False,  # was True
+        "key_terms": ["28.9"],  # the specific figure a correct answer cites
     },
 ]

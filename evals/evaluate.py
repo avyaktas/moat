@@ -152,8 +152,7 @@ def grade_one(q: dict, source: str, client) -> dict:
     # passages with an ellipsis, and a model that returned an empty string is
     # the whole diagnosis, and re-running until it goes green is not one.
     ungrounded = [
-        quote for quote, ok in zip(result["quotes"], result["quote_checks"], strict=True)
-        if not ok
+        quote for quote, ok in zip(result["quotes"], result["quote_checks"], strict=True) if not ok
     ]
 
     return {
@@ -188,8 +187,7 @@ def main():
         return EXIT_INCONCLUSIVE
     source = filing["text"]
     print(
-        f"Source: {filing['origin']} - Item 1A as of {filing['report_date']}, "
-        f"{len(source):,} chars"
+        f"Source: {filing['origin']} - Item 1A as of {filing['report_date']}, {len(source):,} chars"
     )
 
     # The key in eval_data was verified against FY2025 by term count. Say so
@@ -234,7 +232,8 @@ def main():
 
     # hallucinations: questions that SHOULD abstain but didn't
     hallucinations = sum(
-        1 for r, q in zip(rows, QUESTIONS, strict=True)
+        1
+        for r, q in zip(rows, QUESTIONS, strict=True)
         if q["should_abstain"] and not r["abstained"]
     )
 
@@ -244,8 +243,7 @@ def main():
 
     answerable = [r for r in rows if r["answer_correct"] is not None]
     correctness = (
-        sum(r["answer_correct"] for r in answerable) / len(answerable)
-        if answerable else None
+        sum(r["answer_correct"] for r in answerable) / len(answerable) if answerable else None
     )
 
     print("\n" + "=" * 50)
@@ -254,13 +252,21 @@ def main():
     print("Hard gates - decided by string matching, not by the model")
     print(f"  Ungrounded quotes:    {total_fake}   (fabricated quotes; must be 0)")
     if mean_grounding is not None:
-        print(f"  Mean grounding rate:  {mean_grounding:.0%}  (quotes found in source; floor {MIN_GROUNDING_RATE:.0%})")
+        print(
+            f"  Mean grounding rate:  {mean_grounding:.0%}  (quotes found in source; floor {MIN_GROUNDING_RATE:.0%})"
+        )
     print()
     print("Advisory - depends on sampling, varies run to run (see module docstring)")
-    print(f"  Hallucinations:       {hallucinations}   (absent questions answered anyway; target 0)")
-    print(f"  Abstention accuracy:  {abstention_acc:.0%}  ({sum(r['abstention_correct'] for r in rows)}/{n})")
+    print(
+        f"  Hallucinations:       {hallucinations}   (absent questions answered anyway; target 0)"
+    )
+    print(
+        f"  Abstention accuracy:  {abstention_acc:.0%}  ({sum(r['abstention_correct'] for r in rows)}/{n})"
+    )
     if correctness is not None:
-        print(f"  Answer correctness:   {correctness:.0%}  ({sum(r['answer_correct'] for r in answerable)}/{len(answerable)} answerable/specific)")
+        print(
+            f"  Answer correctness:   {correctness:.0%}  ({sum(r['answer_correct'] for r in answerable)}/{len(answerable)} answerable/specific)"
+        )
 
     if total_fake:
         print()
@@ -275,9 +281,7 @@ def main():
     if total_fake:
         failures.append(f"{total_fake} ungrounded quote(s)")
     if mean_grounding is not None and mean_grounding < MIN_GROUNDING_RATE:
-        failures.append(
-            f"grounding rate {mean_grounding:.0%} below floor {MIN_GROUNDING_RATE:.0%}"
-        )
+        failures.append(f"grounding rate {mean_grounding:.0%} below floor {MIN_GROUNDING_RATE:.0%}")
 
     print()
     if failures:

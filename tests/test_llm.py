@@ -27,6 +27,7 @@ def test_client_is_lazy(monkeypatch):
     The ingest CLI, the test suite and the offline grounding replay all import
     these modules without a credential configured.
     """
+
     def _explode(**kwargs):
         raise AssertionError("client built at import time")
 
@@ -39,6 +40,7 @@ def test_client_is_lazy(monkeypatch):
 
 def test_injected_client_still_wins():
     """The client= parameter is what the tests and evaluate.py depend on."""
+
     class _Stub:
         def __init__(self):
             self.messages = self

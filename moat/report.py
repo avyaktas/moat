@@ -106,8 +106,9 @@ def build_report_data(rows: list, price_data: dict | None) -> dict:
     # --- Historical annual margins for the stability check ---
     # Every fourth row approximates one year back, newest first.
     historical_margins = [
-        net_margin(ttm([r.revenue for r in rows[i:i + 4]]),
-                   ttm([r.net_income for r in rows[i:i + 4]]))
+        net_margin(
+            ttm([r.revenue for r in rows[i : i + 4]]), ttm([r.net_income for r in rows[i : i + 4]])
+        )
         for i in range(0, min(len(rows), 20), 4)
     ]
 
@@ -244,8 +245,7 @@ price. Say so explicitly in the reasoning and default to WATCH-CASE.
 Respond with the JSON object only - no preamble, no markdown fences."""
 
 
-def synthesize(report_data: dict, filing_text: str, company_name: str,
-               client=None) -> dict:
+def synthesize(report_data: dict, filing_text: str, company_name: str, client=None) -> dict:
     """Ask the model to interpret computed figures against the filing.
 
     Returns the narrative plus per-quote verification, so the same grounding
@@ -291,6 +291,7 @@ def synthesize(report_data: dict, filing_text: str, company_name: str,
         )
 
     import re
+
     cleaned = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
 
     # strict=False allows raw control characters inside strings. A model
@@ -303,9 +304,7 @@ def synthesize(report_data: dict, filing_text: str, company_name: str,
     try:
         parsed = json.loads(cleaned, strict=False)
     except json.JSONDecodeError as e:
-        raise SynthesisError(
-            f"Model response was not valid JSON: {e}", raw=raw
-        ) from e
+        raise SynthesisError(f"Model response was not valid JSON: {e}", raw=raw) from e
 
     # Verify every quote the model attached to a risk.
     risks = parsed.get("risks", [])

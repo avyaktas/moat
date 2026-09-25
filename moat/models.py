@@ -35,9 +35,7 @@ class Company(Base):
 
 class Financials(Base):
     __tablename__ = "financials"
-    __table_args__ = (
-        UniqueConstraint("company_id", "period_end", name="uq_company_period"),
-    )
+    __table_args__ = (UniqueConstraint("company_id", "period_end", name="uq_company_period"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))
@@ -63,9 +61,7 @@ class Brief(Base):
     """
 
     __tablename__ = "briefs"
-    __table_args__ = (
-        UniqueConstraint("company_id", "question", name="uq_company_question"),
-    )
+    __table_args__ = (UniqueConstraint("company_id", "question", name="uq_company_question"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))
@@ -81,9 +77,7 @@ class Brief(Base):
     # timezone=True, matching reports.generated_at. As a naive column this
     # stored UTC by convention and said so nowhere, leaving every reader to
     # assume - and the API emitted it with no offset at all.
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Report(Base):

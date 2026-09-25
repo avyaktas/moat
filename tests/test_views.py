@@ -93,9 +93,15 @@ def _legacy_stringified_report() -> dict:
         "name": "Microsoft Corp",
         "data": {
             "as_of": "2025-06-30",
-            "ttm": {"revenue": "318273000000", "net_income": "125216000000",
-                    "net_margin": "0.393", "fcf_margin": "0.229",
-                    "revenue_growth": "0.179", "roic": "0.275", "roe": "0.302"},
+            "ttm": {
+                "revenue": "318273000000",
+                "net_income": "125216000000",
+                "net_margin": "0.393",
+                "fcf_margin": "0.229",
+                "revenue_growth": "0.179",
+                "roic": "0.275",
+                "roe": "0.302",
+            },
             "price": {"price": "512.30", "market_cap": "3700000000000"},
             "scorecard": {
                 "checks": [{"name": "ROIC", "status": "PASS", "detail": "27.5% vs 15%"}],
@@ -103,19 +109,34 @@ def _legacy_stringified_report() -> dict:
                 "valuation": {"market_cap": "3700000000000", "p_fcf": "40.5", "p_e": "23.4"},
                 "financial_health": {
                     # change as a string is the exact value that crashed `> 0`
-                    "cash": {"prior": "70000000000", "current": "75000000000",
-                             "change": "5000000000"},
-                    "total_debt": {"prior": "45000000000", "current": "42000000000",
-                                   "change": "-3000000000"},
+                    "cash": {
+                        "prior": "70000000000",
+                        "current": "75000000000",
+                        "change": "5000000000",
+                    },
+                    "total_debt": {
+                        "prior": "45000000000",
+                        "current": "42000000000",
+                        "change": "-3000000000",
+                    },
                     "survivability": {"verdict": "Comfortably survivable."},
                 },
             },
         },
-        "narrative": {"verdict": "WATCH-CASE", "grounding_rate": "1.0",
-                      "hype_vs_reality": "x", "risks": [], "reasoning": "y",
-                      "strategy": "z"},
-        "sources": {"financials": "SEC EDGAR", "price": "yfinance",
-                    "filing": "http://x", "report_date": "2025-07-30"},
+        "narrative": {
+            "verdict": "WATCH-CASE",
+            "grounding_rate": "1.0",
+            "hype_vs_reality": "x",
+            "risks": [],
+            "reasoning": "y",
+            "strategy": "z",
+        },
+        "sources": {
+            "financials": "SEC EDGAR",
+            "price": "yfinance",
+            "filing": "http://x",
+            "report_date": "2025-07-30",
+        },
     }
 
 
@@ -125,10 +146,10 @@ def test_render_report_survives_legacy_stringified_cache():
     assert html.rstrip().endswith("</html>")
     # The values that used to crash now render.
     assert "WATCH-CASE" in html
-    assert "100%" in html          # grounding_rate coerced from "1.0"
-    assert "$512.30" in html       # share price coerced from "512.30"
-    assert "$5.0B" in html         # a positive change coerced from a string
-    assert "-$3.0B" in html        # a negative change too
+    assert "100%" in html  # grounding_rate coerced from "1.0"
+    assert "$512.30" in html  # share price coerced from "512.30"
+    assert "$5.0B" in html  # a positive change coerced from a string
+    assert "-$3.0B" in html  # a negative change too
 
 
 # --- unknown is not zero, on the page as well as in the data ---
@@ -139,37 +160,50 @@ def test_render_report_survives_legacy_stringified_cache():
 # the rule held all the way through the pipeline and then broke in the last
 # place anyone would check, the rendered page.
 
+
 def _report_with_health(health: dict) -> dict:
     return {
-        "company": "TEST", "name": "Test Co",
+        "company": "TEST",
+        "name": "Test Co",
         "data": {
             "as_of": "2025-06-30",
             "ttm": {},
             "price": None,
             "scorecard": {
-                "checks": [], "summary": {"passed": 0, "evaluable": 0, "unknown": 0},
+                "checks": [],
+                "summary": {"passed": 0, "evaluable": 0, "unknown": 0},
                 "valuation": {},
                 "financial_health": health,
             },
         },
-        "narrative": None, "sources": {}, "cache": {},
+        "narrative": None,
+        "sources": {},
+        "cache": {},
     }
 
 
 def test_zero_change_renders_as_zero_not_unknown():
-    html = render_report(_report_with_health({
-        "cash": {"prior": 1000.0, "current": 1000.0, "change": 0.0},
-        "survivability": {"verdict": ""},
-    }))
+    html = render_report(
+        _report_with_health(
+            {
+                "cash": {"prior": 1000.0, "current": 1000.0, "change": 0.0},
+                "survivability": {"verdict": ""},
+            }
+        )
+    )
     row = html.split("Cash")[1].split("</tr>")[0]
     assert "$0" in row, "a real zero change must render as $0"
 
 
 def test_unknown_change_still_renders_as_em_dash():
-    html = render_report(_report_with_health({
-        "cash": {"prior": None, "current": 1000.0, "change": None},
-        "survivability": {"verdict": ""},
-    }))
+    html = render_report(
+        _report_with_health(
+            {
+                "cash": {"prior": None, "current": 1000.0, "change": None},
+                "survivability": {"verdict": ""},
+            }
+        )
+    )
     row = html.split("Cash")[1].split("</tr>")[0]
     assert EM_DASH in row, "an unknown change must stay an em-dash"
     assert "$0" not in row
@@ -177,14 +211,30 @@ def test_unknown_change_still_renders_as_em_dash():
 
 def test_zero_and_unknown_change_render_differently():
     """The whole point: these two must not look the same."""
-    zero = render_report(_report_with_health({
-        "cash": {"prior": 1.0, "current": 1.0, "change": 0.0},
-        "survivability": {"verdict": ""},
-    })).split("Cash")[1].split("</tr>")[0]
-    unknown = render_report(_report_with_health({
-        "cash": {"prior": None, "current": None, "change": None},
-        "survivability": {"verdict": ""},
-    })).split("Cash")[1].split("</tr>")[0]
+    zero = (
+        render_report(
+            _report_with_health(
+                {
+                    "cash": {"prior": 1.0, "current": 1.0, "change": 0.0},
+                    "survivability": {"verdict": ""},
+                }
+            )
+        )
+        .split("Cash")[1]
+        .split("</tr>")[0]
+    )
+    unknown = (
+        render_report(
+            _report_with_health(
+                {
+                    "cash": {"prior": None, "current": None, "change": None},
+                    "survivability": {"verdict": ""},
+                }
+            )
+        )
+        .split("Cash")[1]
+        .split("</tr>")[0]
+    )
     assert zero != unknown
 
 
@@ -196,26 +246,33 @@ def _report_with_checks(checks: list) -> dict:
 
 def test_unexpected_check_status_does_not_crash():
     """A status outside the three known values used to raise KeyError."""
-    html = render_report(_report_with_checks(
-        [{"name": "Novel", "status": "SKIPPED", "detail": "new status"}]
-    ))
+    html = render_report(
+        _report_with_checks([{"name": "Novel", "status": "SKIPPED", "detail": "new status"}])
+    )
     assert "Novel" in html
 
 
 def test_missing_filing_url_is_not_a_dead_link():
     """esc(None) is the empty string, so href="" linked to the current page."""
     r = _report_with_health({"survivability": {"verdict": ""}})
-    r["sources"] = {"financials": "SEC EDGAR", "price": "yfinance",
-                    "filing": None, "report_date": None}
+    r["sources"] = {
+        "financials": "SEC EDGAR",
+        "price": "yfinance",
+        "filing": None,
+        "report_date": None,
+    }
     html = render_report(r)
     assert 'href=""' not in html
 
 
 def test_present_filing_url_is_still_a_link():
     r = _report_with_health({"survivability": {"verdict": ""}})
-    r["sources"] = {"financials": "SEC EDGAR", "price": "yfinance",
-                    "filing": "https://example.com/10k.htm",
-                    "report_date": "2025-06-30"}
+    r["sources"] = {
+        "financials": "SEC EDGAR",
+        "price": "yfinance",
+        "filing": "https://example.com/10k.htm",
+        "report_date": "2025-06-30",
+    }
     html = render_report(r)
     assert 'href="https://example.com/10k.htm"' in html
 
@@ -234,6 +291,7 @@ def test_zero_share_price_renders_as_zero():
 # "2026-09-24T14:44:35-04:00" was displayed as "2026-09-24 14:44:35 UTC" -
 # four hours wrong, with a label asserting it was not.
 
+
 def test_footer_timestamp_is_labelled_utc_only_when_it_is_utc():
     r = _report_with_health({"survivability": {"verdict": ""}})
     r["cache"] = {"cached": True, "generated_at": "2026-09-24T18:44:35+00:00"}
@@ -247,9 +305,7 @@ def test_footer_does_not_mislabel_a_local_timestamp_as_utc():
     r = _report_with_health({"survivability": {"verdict": ""}})
     r["cache"] = {"cached": True, "generated_at": "2026-09-24T14:44:35-04:00"}
     html = render_report(r)
-    assert "2026-09-24 14:44:35 UTC" not in html, (
-        "a local-time value was rendered with a UTC label"
-    )
+    assert "2026-09-24 14:44:35 UTC" not in html, "a local-time value was rendered with a UTC label"
 
 
 # --- the landing page and the 404 page ---
@@ -367,18 +423,24 @@ def test_shell_handles_a_dropped_connection():
 
 
 def _computed_only_report() -> dict:
-    r = _report_with_health({
-        "cash": {"prior": 1.0, "current": 2.0, "change": 1.0},
-        "survivability": {"verdict": "Self-funding"},
-    })
+    r = _report_with_health(
+        {
+            "cash": {"prior": 1.0, "current": 2.0, "change": 1.0},
+            "survivability": {"verdict": "Self-funding"},
+        }
+    )
     r["data"]["ttm"] = {"revenue": 331839000000.0, "roic": 0.277}
     r["data"]["scorecard"]["checks"] = [
         {"name": "ROIC", "status": "PASS", "detail": "27.7% vs 15%"},
         {"name": "Leverage", "status": "FAIL", "detail": "2.4 - a red flag"},
     ]
     r["data"]["scorecard"]["summary"] = {"passed": 1, "evaluable": 2, "unknown": 0}
-    r["sources"] = {"financials": "SEC EDGAR", "price": "yfinance",
-                    "filing": "http://x", "report_date": "2026-01-31"}
+    r["sources"] = {
+        "financials": "SEC EDGAR",
+        "price": "yfinance",
+        "filing": "http://x",
+        "report_date": "2026-01-31",
+    }
     return r
 
 
@@ -412,9 +474,14 @@ def test_partial_fragment_omits_the_grounding_claim():
 
 def test_finished_fragment_has_no_pending_markers():
     r = _computed_only_report()
-    r["narrative"] = {"verdict": "WATCH-CASE", "grounding_rate": 1.0,
-                      "hype_vs_reality": "h", "risks": [], "reasoning": "r",
-                      "strategy": "s"}
+    r["narrative"] = {
+        "verdict": "WATCH-CASE",
+        "grounding_rate": 1.0,
+        "hype_vs_reality": "h",
+        "risks": [],
+        "reasoning": "r",
+        "strategy": "s",
+    }
     html = render_report_fragment(r, pending=False)
     assert "Writing analysis" not in html
     assert "WATCH-CASE" in html
@@ -425,13 +492,24 @@ def test_partial_and_final_share_one_layout():
     """Two copies of the layout would drift; there is only one builder."""
     r = _computed_only_report()
     partial = render_report_fragment(r, pending=True)
-    r["narrative"] = {"verdict": "WATCH-CASE", "grounding_rate": 1.0,
-                      "hype_vs_reality": "h", "risks": [], "reasoning": "r",
-                      "strategy": "s"}
+    r["narrative"] = {
+        "verdict": "WATCH-CASE",
+        "grounding_rate": 1.0,
+        "hype_vs_reality": "h",
+        "risks": [],
+        "reasoning": "r",
+        "strategy": "s",
+    }
     final = render_report_fragment(r, pending=False)
-    for heading in ("Scorecard", "Figures", "Financial health",
-                    "Hype versus reality", "Risks and sell triggers",
-                    "The case", "The strategy"):
+    for heading in (
+        "Scorecard",
+        "Figures",
+        "Financial health",
+        "Hype versus reality",
+        "Risks and sell triggers",
+        "The case",
+        "The strategy",
+    ):
         assert heading in partial, f"{heading} missing while pending"
         assert heading in final
 
@@ -450,6 +528,7 @@ def test_failure_block_escapes_its_input():
 
 
 # --- the landing page acknowledges a submit immediately ---
+
 
 def test_landing_page_acknowledges_the_submit():
     """A button that does nothing visible when pressed is the whole complaint."""
@@ -484,9 +563,14 @@ def test_every_sheet_rendering_keeps_the_swap_anchor():
     report = _computed_only_report()
     assert 'id="sheet"' in render_report_shell("NVDA")
     assert 'id="sheet"' in render_report_fragment(report, pending=True)
-    report["narrative"] = {"verdict": "WATCH-CASE", "grounding_rate": 1.0,
-                           "hype_vs_reality": "h", "risks": [], "reasoning": "r",
-                           "strategy": "s"}
+    report["narrative"] = {
+        "verdict": "WATCH-CASE",
+        "grounding_rate": 1.0,
+        "hype_vs_reality": "h",
+        "risks": [],
+        "reasoning": "r",
+        "strategy": "s",
+    }
     assert 'id="sheet"' in render_report_fragment(report, pending=False)
     assert 'id="sheet"' in render_report(report)
 
@@ -513,8 +597,16 @@ def test_both_themes_are_defined():
 
 
 def test_the_palette_is_variables_not_literals():
-    for token in ("--bg", "--surface", "--border", "--text", "--text-muted",
-                  "--accent", "--pos", "--neg"):
+    for token in (
+        "--bg",
+        "--surface",
+        "--border",
+        "--text",
+        "--text-muted",
+        "--accent",
+        "--pos",
+        "--neg",
+    ):
         assert f"{token}:" in _TOKENS, f"{token} missing"
 
 
@@ -564,6 +656,7 @@ def test_every_page_carries_the_tokens():
 
 # --- search behaviour ---
 
+
 def test_search_autofocuses():
     assert "inp.focus();" in render_landing()
 
@@ -610,13 +703,18 @@ def test_example_tickers_are_still_offered():
 
 # --- the report layout ---
 
+
 def test_verdict_renders_as_a_colour_coded_badge():
     r = _computed_only_report()
-    for verdict, cls in (("BUY-CASE", "buy"), ("WATCH-CASE", "watch"),
-                         ("AVOID-CASE", "avoid")):
-        r["narrative"] = {"verdict": verdict, "grounding_rate": 1.0,
-                          "hype_vs_reality": "h", "risks": [], "reasoning": "r",
-                          "strategy": "s"}
+    for verdict, cls in (("BUY-CASE", "buy"), ("WATCH-CASE", "watch"), ("AVOID-CASE", "avoid")):
+        r["narrative"] = {
+            "verdict": verdict,
+            "grounding_rate": 1.0,
+            "hype_vs_reality": "h",
+            "risks": [],
+            "reasoning": "r",
+            "strategy": "s",
+        }
         html = render_report_fragment(r, pending=False)
         assert f'class="badge {cls}"' in html, f"{verdict} badge missing"
 
@@ -628,38 +726,53 @@ def test_an_unknown_verdict_gets_the_neutral_badge():
 
 def test_negative_changes_are_red_and_positive_green():
     """Direction is the point of the change column."""
-    html = render_report_fragment(_report_with_health({
-        "cash": {"prior": 10.0, "current": 5.0, "change": -5_000_000_000.0},
-        "total_debt": {"prior": 5.0, "current": 10.0, "change": 5_000_000_000.0},
-        "survivability": {"verdict": ""},
-    }), pending=True)
+    html = render_report_fragment(
+        _report_with_health(
+            {
+                "cash": {"prior": 10.0, "current": 5.0, "change": -5_000_000_000.0},
+                "total_debt": {"prior": 5.0, "current": 10.0, "change": 5_000_000_000.0},
+                "survivability": {"verdict": ""},
+            }
+        ),
+        pending=True,
+    )
     assert '<span class="neg">-$5.0B</span>' in html
     assert '<span class="pos">$5.0B</span>' in html
 
 
 def test_an_unknown_change_gets_no_colour():
     """Missing is not a direction."""
-    html = render_report_fragment(_report_with_health({
-        "cash": {"prior": None, "current": None, "change": None},
-        "survivability": {"verdict": ""},
-    }), pending=True)
+    html = render_report_fragment(
+        _report_with_health(
+            {
+                "cash": {"prior": None, "current": None, "change": None},
+                "survivability": {"verdict": ""},
+            }
+        ),
+        pending=True,
+    )
     row = html.split("Cash")[1].split("</tr>")[0]
     assert "pos" not in row and "neg" not in row
     assert EM_DASH in row
 
 
 def test_a_zero_change_gets_no_colour():
-    html = render_report_fragment(_report_with_health({
-        "cash": {"prior": 1.0, "current": 1.0, "change": 0.0},
-        "survivability": {"verdict": ""},
-    }), pending=True)
+    html = render_report_fragment(
+        _report_with_health(
+            {
+                "cash": {"prior": 1.0, "current": 1.0, "change": 0.0},
+                "survivability": {"verdict": ""},
+            }
+        ),
+        pending=True,
+    )
     row = html.split("Cash")[1].split("</tr>")[0]
     assert "pos" not in row and "neg" not in row
 
 
 def test_the_meter_has_one_segment_per_criterion():
     html = render_report_fragment(_computed_only_report(), pending=True)
-    assert html.count('class="seg ') == 2   # the sample report has two checks
+    assert html.count('class="seg ') == 2  # the sample report has two checks
 
 
 def test_the_meter_is_described_for_screen_readers():
@@ -701,10 +814,12 @@ def test_the_health_table_can_scroll_on_a_narrow_screen():
 def test_the_verified_badge_is_visible_on_a_quote():
     r = _computed_only_report()
     r["narrative"] = {
-        "verdict": "WATCH-CASE", "grounding_rate": 1.0, "hype_vs_reality": "h",
-        "reasoning": "r", "strategy": "s",
-        "risks": [{"risk": "R", "quote": "Q", "sell_trigger": "T",
-                   "quote_verified": True}],
+        "verdict": "WATCH-CASE",
+        "grounding_rate": 1.0,
+        "hype_vs_reality": "h",
+        "reasoning": "r",
+        "strategy": "s",
+        "risks": [{"risk": "R", "quote": "Q", "sell_trigger": "T", "quote_verified": True}],
     }
     html = render_report_fragment(r, pending=False)
     assert 'class="verified"' in html
@@ -715,10 +830,12 @@ def test_the_verified_badge_is_visible_on_a_quote():
 def test_an_unverified_quote_is_marked_differently():
     r = _computed_only_report()
     r["narrative"] = {
-        "verdict": "WATCH-CASE", "grounding_rate": 0.0, "hype_vs_reality": "h",
-        "reasoning": "r", "strategy": "s",
-        "risks": [{"risk": "R", "quote": "Q", "sell_trigger": "T",
-                   "quote_verified": False}],
+        "verdict": "WATCH-CASE",
+        "grounding_rate": 0.0,
+        "hype_vs_reality": "h",
+        "reasoning": "r",
+        "strategy": "s",
+        "risks": [{"risk": "R", "quote": "Q", "sell_trigger": "T", "quote_verified": False}],
     }
     html = render_report_fragment(r, pending=False)
     assert 'class="unverified"' in html
@@ -727,9 +844,14 @@ def test_an_unverified_quote_is_marked_differently():
 
 def test_the_report_has_a_sticky_bar_with_a_theme_toggle():
     r = _computed_only_report()
-    r["narrative"] = {"verdict": "BUY-CASE", "grounding_rate": 1.0,
-                      "hype_vs_reality": "h", "risks": [], "reasoning": "r",
-                      "strategy": "s"}
+    r["narrative"] = {
+        "verdict": "BUY-CASE",
+        "grounding_rate": 1.0,
+        "hype_vs_reality": "h",
+        "risks": [],
+        "reasoning": "r",
+        "strategy": "s",
+    }
     html = render_report(r)
     assert 'class="topbar"' in html
     assert 'id="theme"' in html
@@ -738,9 +860,14 @@ def test_the_report_has_a_sticky_bar_with_a_theme_toggle():
 
 def test_the_theme_choice_is_remembered():
     r = _computed_only_report()
-    r["narrative"] = {"verdict": "BUY-CASE", "grounding_rate": 1.0,
-                      "hype_vs_reality": "h", "risks": [], "reasoning": "r",
-                      "strategy": "s"}
+    r["narrative"] = {
+        "verdict": "BUY-CASE",
+        "grounding_rate": 1.0,
+        "hype_vs_reality": "h",
+        "risks": [],
+        "reasoning": "r",
+        "strategy": "s",
+    }
     html = render_report(r)
     assert "localStorage" in html
     assert "catch (err)" in html, "private mode must not break the page"
@@ -751,6 +878,7 @@ def test_the_theme_choice_is_remembered():
 # A generic spinner tells you to wait. A skeleton tells you what is coming and
 # holds its seat, so when the figures land they land in place: the swap
 # changes pixels, not positions.
+
 
 def test_the_skeleton_has_the_same_shape_as_the_report():
     """Six criteria and twelve figures are fixed by the domain, so the
@@ -765,17 +893,29 @@ def test_the_skeleton_uses_the_same_classes_as_the_real_content():
     invisible. Different markup would need its sizes kept in sync by hand."""
     shell = render_report_shell("NVDA")
     real = render_report_fragment(_computed_only_report(), pending=True)
-    for cls in ('class="sheet"', 'class="hero"', 'class="checks"',
-                'class="figures"', 'class="meter"', 'class="table-scroll"'):
+    for cls in (
+        'class="sheet"',
+        'class="hero"',
+        'class="checks"',
+        'class="figures"',
+        'class="meter"',
+        'class="table-scroll"',
+    ):
         assert cls in shell, f"{cls} missing from the skeleton"
         assert cls in real, f"{cls} missing from the report"
 
 
 def test_the_skeleton_reserves_every_section():
     shell = render_report_shell("NVDA")
-    for heading in ("Scorecard", "Figures", "Financial health",
-                    "Hype versus reality", "Risks and sell triggers",
-                    "The case", "The strategy"):
+    for heading in (
+        "Scorecard",
+        "Figures",
+        "Financial health",
+        "Hype versus reality",
+        "Risks and sell triggers",
+        "The case",
+        "The strategy",
+    ):
         assert heading in shell, f"{heading} not reserved while loading"
 
 
@@ -789,13 +929,13 @@ def test_repeated_blocks_have_a_fixed_height():
     from moat.views import _REPORT_CSS
 
     # Measured in a browser, skeleton against filled, not guessed.
-    assert "min-height: 108px" in _REPORT_CSS   # criterion card
-    assert "min-height: 90px" in _REPORT_CSS    # figure tile
-    assert "height: 45px" in _REPORT_CSS        # health row
-    assert "min-height: 48px" in _REPORT_CSS    # survivability panel
-    assert "min-height: 26px" in _REPORT_CSS    # share price
-    assert "min-height: 23px" in _REPORT_CSS    # hero subtitle
-    assert "min-height: 21px" in _REPORT_CSS    # meter caption
+    assert "min-height: 108px" in _REPORT_CSS  # criterion card
+    assert "min-height: 90px" in _REPORT_CSS  # figure tile
+    assert "height: 45px" in _REPORT_CSS  # health row
+    assert "min-height: 48px" in _REPORT_CSS  # survivability panel
+    assert "min-height: 26px" in _REPORT_CSS  # share price
+    assert "min-height: 23px" in _REPORT_CSS  # hero subtitle
+    assert "min-height: 21px" in _REPORT_CSS  # meter caption
 
 
 def test_content_fades_in_when_it_lands():
@@ -882,8 +1022,7 @@ def test_the_404_still_says_what_went_wrong():
 def test_the_theme_applies_on_every_page():
     """Choosing light on a report and clicking the wordmark must not land you
     back in dark."""
-    for html in (render_landing(), render_not_found("x"),
-                 render_report_shell("NVDA")):
+    for html in (render_landing(), render_not_found("x"), render_report_shell("NVDA")):
         assert "moat.theme" in html
 
 
@@ -916,5 +1055,5 @@ def test_muted_text_is_dark_enough_to_read():
     Measured in a browser against both backgrounds: it was 2.99:1 in light and
     4.12:1 in dark, and is now 4.87 and 5.72.
     """
-    assert "--text-subtle:  #6a727c;" in _TOKENS   # light
-    assert "--text-subtle:  #828d99;" in _TOKENS   # dark
+    assert "--text-subtle:  #6a727c;" in _TOKENS  # light
+    assert "--text-subtle:  #828d99;" in _TOKENS  # dark

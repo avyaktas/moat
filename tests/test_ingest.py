@@ -15,8 +15,7 @@ from moat.ingest import (
 )
 
 
-def _entry(start: str, end: str, val: float, frame: str | None = None,
-           form: str = "10-Q") -> dict:
+def _entry(start: str, end: str, val: float, frame: str | None = None, form: str = "10-Q") -> dict:
     e = {"start": start, "end": end, "val": val, "form": form}
     if frame is not None:
         e["frame"] = frame
@@ -31,9 +30,9 @@ def _facts(entries: list[dict], tag: str = "OCF") -> dict:
 # standalone-quarter frame; Q2/Q3/FY are reported as running totals from Jan 1.
 CUMULATIVE = [
     _entry("2024-01-01", "2024-03-31", 100.0, frame="CY2024Q1"),  # Q1        90d
-    _entry("2024-01-01", "2024-06-30", 250.0),                    # YTD Q2   181d
-    _entry("2024-01-01", "2024-09-30", 420.0),                    # YTD Q3   273d
-    _entry("2024-01-01", "2024-12-31", 600.0, form="10-K"),       # FY       365d
+    _entry("2024-01-01", "2024-06-30", 250.0),  # YTD Q2   181d
+    _entry("2024-01-01", "2024-09-30", 420.0),  # YTD Q3   273d
+    _entry("2024-01-01", "2024-12-31", 600.0, form="10-K"),  # FY       365d
 ]
 
 
@@ -55,9 +54,9 @@ def test_extract_ytd_returns_the_running_totals():
 def test_interim_quarters_recovered_by_differencing():
     q = extract_quarterly(_facts(CUMULATIVE), ["OCF"])
     q = derive_interim_quarters(q, extract_ytd(_facts(CUMULATIVE), ["OCF"]))
-    assert q[date(2024, 3, 31)] == 100.0            # Q1, untouched
-    assert q[date(2024, 6, 30)] == 150.0            # 250 - 100
-    assert q[date(2024, 9, 30)] == 170.0            # 420 - 250
+    assert q[date(2024, 3, 31)] == 100.0  # Q1, untouched
+    assert q[date(2024, 6, 30)] == 150.0  # 250 - 100
+    assert q[date(2024, 9, 30)] == 170.0  # 420 - 250
     # The annual is left to derive_q4, not filled here.
     assert date(2024, 12, 31) not in q
 
@@ -67,13 +66,13 @@ def test_missing_middle_period_yields_no_estimate():
     # need YTD(Q2)). Both must stay absent rather than be fabricated.
     entries = [
         _entry("2024-01-01", "2024-03-31", 100.0, frame="CY2024Q1"),  # Q1     90d
-        _entry("2024-01-01", "2024-09-30", 420.0),                    # YTD Q3 273d
+        _entry("2024-01-01", "2024-09-30", 420.0),  # YTD Q3 273d
     ]
     q = extract_quarterly(_facts(entries), ["OCF"])
     q = derive_interim_quarters(q, extract_ytd(_facts(entries), ["OCF"]))
     assert q[date(2024, 3, 31)] == 100.0
-    assert date(2024, 6, 30) not in q   # Q2 never existed
-    assert date(2024, 9, 30) not in q   # Q3 not derivable across the gap
+    assert date(2024, 6, 30) not in q  # Q2 never existed
+    assert date(2024, 9, 30) not in q  # Q3 not derivable across the gap
 
 
 def test_discrete_filer_is_a_no_op():
@@ -88,12 +87,12 @@ def test_first_member_not_treated_as_quarter_when_it_is_a_half_year():
     # If the earliest available YTD point already spans two quarters, it is not
     # a standalone quarter and must not be recorded as one.
     entries = [
-        _entry("2024-01-01", "2024-06-30", 250.0),   # first point is 181d
-        _entry("2024-01-01", "2024-09-30", 420.0),   # step 92d -> Q3 derivable
+        _entry("2024-01-01", "2024-06-30", 250.0),  # first point is 181d
+        _entry("2024-01-01", "2024-09-30", 420.0),  # step 92d -> Q3 derivable
     ]
     q = derive_interim_quarters({}, extract_ytd(_facts(entries), ["OCF"]))
-    assert date(2024, 6, 30) not in q            # not a standalone quarter
-    assert q[date(2024, 9, 30)] == 170.0         # 420 - 250, one clean step
+    assert date(2024, 6, 30) not in q  # not a standalone quarter
+    assert q[date(2024, 9, 30)] == 170.0  # 420 - 250, one clean step
 
 
 # --- ticker normalization at the ingest boundary ---
@@ -176,7 +175,7 @@ def test_q4_is_the_year_minus_three_quarters():
     }
     annual = {date(2024, 12, 31): (date(2024, 1, 1), 600.0)}
     out = derive_q4(quarterly, annual)
-    assert out[date(2024, 12, 31)] == 180.0      # 600 - (100 + 150 + 170)
+    assert out[date(2024, 12, 31)] == 180.0  # 600 - (100 + 150 + 170)
 
 
 def test_q4_not_derived_from_two_quarters():
@@ -190,8 +189,10 @@ def test_q4_not_derived_from_four_quarters():
     """Four quarters inside the year means one is already Q4 or the data is
     wrong; subtracting would produce a fifth quarter from nowhere."""
     quarterly = {
-        date(2024, 3, 31): 100.0, date(2024, 6, 30): 150.0,
-        date(2024, 9, 30): 170.0, date(2024, 11, 30): 50.0,
+        date(2024, 3, 31): 100.0,
+        date(2024, 6, 30): 150.0,
+        date(2024, 9, 30): 170.0,
+        date(2024, 11, 30): 50.0,
     }
     annual = {date(2025, 1, 31): (date(2024, 1, 1), 600.0)}
     assert date(2025, 1, 31) not in derive_q4(quarterly, annual)
@@ -200,8 +201,10 @@ def test_q4_not_derived_from_four_quarters():
 def test_existing_q4_is_never_overwritten():
     """A filed Q4 is a fact; a derived one is arithmetic. Facts win."""
     quarterly = {
-        date(2024, 3, 31): 100.0, date(2024, 6, 30): 150.0,
-        date(2024, 9, 30): 170.0, date(2024, 12, 31): 999.0,
+        date(2024, 3, 31): 100.0,
+        date(2024, 6, 30): 150.0,
+        date(2024, 9, 30): 170.0,
+        date(2024, 12, 31): 999.0,
     }
     annual = {date(2024, 12, 31): (date(2024, 1, 1), 600.0)}
     assert derive_q4(quarterly, annual)[date(2024, 12, 31)] == 999.0
@@ -210,7 +213,7 @@ def test_existing_q4_is_never_overwritten():
 def test_q4_ignores_quarters_outside_the_fiscal_year():
     """Only quarters inside [fy_start, fy_end] count toward the subtraction."""
     quarterly = {
-        date(2023, 12, 31): 500.0,                # prior year, must be ignored
+        date(2023, 12, 31): 500.0,  # prior year, must be ignored
         date(2024, 3, 31): 100.0,
         date(2024, 6, 30): 150.0,
         date(2024, 9, 30): 170.0,
@@ -233,7 +236,8 @@ def test_q4_handles_an_off_calendar_fiscal_year():
 def test_q4_can_be_negative():
     """A loss-making fourth quarter is a real outcome, not a bad derivation."""
     quarterly = {
-        date(2024, 3, 31): 100.0, date(2024, 6, 30): 100.0,
+        date(2024, 3, 31): 100.0,
+        date(2024, 6, 30): 100.0,
         date(2024, 9, 30): 100.0,
     }
     annual = {date(2024, 12, 31): (date(2024, 1, 1), 250.0)}
@@ -247,11 +251,14 @@ def test_q4_with_no_annual_data_derives_nothing():
 
 # ---------------------------------------------------------------- extract_annual
 
+
 def test_extract_annual_takes_only_10k_entries():
-    facts = _facts([
-        _entry("2024-01-01", "2024-12-31", 600.0, form="10-K"),
-        _entry("2023-01-01", "2023-12-31", 500.0, form="10-Q"),
-    ])
+    facts = _facts(
+        [
+            _entry("2024-01-01", "2024-12-31", 600.0, form="10-K"),
+            _entry("2023-01-01", "2023-12-31", 500.0, form="10-Q"),
+        ]
+    )
     out = extract_annual(facts, ["OCF"])
     assert date(2024, 12, 31) in out
     assert date(2023, 12, 31) not in out
@@ -259,10 +266,12 @@ def test_extract_annual_takes_only_10k_entries():
 
 def test_extract_annual_tolerates_52_and_53_week_years():
     """Retailers run 52/53-week fiscal calendars; 364 and 371 days are years."""
-    facts = _facts([
-        _entry("2024-01-01", "2024-12-29", 600.0, form="10-K"),   # 363 days
-        _entry("2022-01-02", "2023-01-07", 500.0, form="10-K"),   # 370 days
-    ])
+    facts = _facts(
+        [
+            _entry("2024-01-01", "2024-12-29", 600.0, form="10-K"),  # 363 days
+            _entry("2022-01-02", "2023-01-07", 500.0, form="10-K"),  # 370 days
+        ]
+    )
     out = extract_annual(facts, ["OCF"])
     assert len(out) == 2
 
@@ -282,21 +291,38 @@ def test_extract_annual_returns_the_start_date():
 
 # ---------------------------------------------------------------- the load loop
 
+
 def test_ingest_writes_rows_and_derives_fcf(client, monkeypatch):
     """free_cash_flow = operating cash flow - capex, and only when both exist."""
     from moat.models import Financials
 
-    facts = {"facts": {"us-gaap": {
-        "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": [
-            _entry("2024-01-01", "2024-03-31", 300.0, frame="CY2024Q1"),
-        ]}},
-        "PaymentsToAcquirePropertyPlantAndEquipment": {"units": {"USD": [
-            _entry("2024-01-01", "2024-03-31", 100.0, frame="CY2024Q1"),
-        ]}},
-        "NetIncomeLoss": {"units": {"USD": [
-            _entry("2024-01-01", "2024-03-31", 50.0, frame="CY2024Q1"),
-        ]}},
-    }}}
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "NetCashProvidedByUsedInOperatingActivities": {
+                    "units": {
+                        "USD": [
+                            _entry("2024-01-01", "2024-03-31", 300.0, frame="CY2024Q1"),
+                        ]
+                    }
+                },
+                "PaymentsToAcquirePropertyPlantAndEquipment": {
+                    "units": {
+                        "USD": [
+                            _entry("2024-01-01", "2024-03-31", 100.0, frame="CY2024Q1"),
+                        ]
+                    }
+                },
+                "NetIncomeLoss": {
+                    "units": {
+                        "USD": [
+                            _entry("2024-01-01", "2024-03-31", 50.0, frame="CY2024Q1"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
 
     monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", "Microsoft"))
@@ -309,9 +335,9 @@ def test_ingest_writes_rows_and_derives_fcf(client, monkeypatch):
     try:
         row = db.query(Financials).one()
         assert row.period_end == date(2024, 3, 31)
-        assert float(row.free_cash_flow) == 200.0     # 300 - 100
+        assert float(row.free_cash_flow) == 200.0  # 300 - 100
         assert float(row.net_income) == 50.0
-        assert row.revenue is None                    # absent stays absent
+        assert row.revenue is None  # absent stays absent
     finally:
         db.close()
 
@@ -320,11 +346,19 @@ def test_ingest_leaves_fcf_null_when_capex_is_missing(client, monkeypatch):
     """Unknown is not zero: OCF alone must not be reported as free cash flow."""
     from moat.models import Financials
 
-    facts = {"facts": {"us-gaap": {
-        "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": [
-            _entry("2024-01-01", "2024-03-31", 300.0, frame="CY2024Q1"),
-        ]}},
-    }}}
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "NetCashProvidedByUsedInOperatingActivities": {
+                    "units": {
+                        "USD": [
+                            _entry("2024-01-01", "2024-03-31", 300.0, frame="CY2024Q1"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
 
     monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", "Microsoft"))
@@ -341,14 +375,26 @@ def test_ingest_leaves_fcf_null_when_capex_is_missing(client, monkeypatch):
 def test_ingest_sums_current_and_noncurrent_debt(client, monkeypatch):
     from moat.models import Financials
 
-    facts = {"facts": {"us-gaap": {
-        "LongTermDebtCurrent": {"units": {"USD": [
-            _entry("2024-01-01", "2024-03-31", 10.0, frame="CY2024Q1I"),
-        ]}},
-        "LongTermDebtNoncurrent": {"units": {"USD": [
-            _entry("2024-01-01", "2024-03-31", 90.0, frame="CY2024Q1I"),
-        ]}},
-    }}}
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "LongTermDebtCurrent": {
+                    "units": {
+                        "USD": [
+                            _entry("2024-01-01", "2024-03-31", 10.0, frame="CY2024Q1I"),
+                        ]
+                    }
+                },
+                "LongTermDebtNoncurrent": {
+                    "units": {
+                        "USD": [
+                            _entry("2024-01-01", "2024-03-31", 90.0, frame="CY2024Q1I"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
 
     monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", "Microsoft"))
@@ -365,11 +411,19 @@ def test_ingest_sums_current_and_noncurrent_debt(client, monkeypatch):
 def test_ingest_total_debt_null_when_neither_component_exists(client, monkeypatch):
     from moat.models import Financials
 
-    facts = {"facts": {"us-gaap": {
-        "NetIncomeLoss": {"units": {"USD": [
-            _entry("2024-01-01", "2024-03-31", 50.0, frame="CY2024Q1"),
-        ]}},
-    }}}
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "NetIncomeLoss": {
+                    "units": {
+                        "USD": [
+                            _entry("2024-01-01", "2024-03-31", 50.0, frame="CY2024Q1"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
 
     monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", "Microsoft"))
@@ -387,11 +441,19 @@ def test_ingest_is_idempotent_on_rerun(client, monkeypatch):
     """The docstring promises reruns write no new rows."""
     from moat.models import Financials
 
-    facts = {"facts": {"us-gaap": {
-        "NetIncomeLoss": {"units": {"USD": [
-            _entry("2024-01-01", "2024-03-31", 50.0, frame="CY2024Q1"),
-        ]}},
-    }}}
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "NetIncomeLoss": {
+                    "units": {
+                        "USD": [
+                            _entry("2024-01-01", "2024-03-31", 50.0, frame="CY2024Q1"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
 
     monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", "Microsoft"))
@@ -412,11 +474,19 @@ def test_ingest_rerun_updates_a_restated_figure(client, monkeypatch):
     from moat.models import Financials
 
     def _facts_with(value):
-        return {"facts": {"us-gaap": {
-            "NetIncomeLoss": {"units": {"USD": [
-                _entry("2024-01-01", "2024-03-31", value, frame="CY2024Q1"),
-            ]}},
-        }}}
+        return {
+            "facts": {
+                "us-gaap": {
+                    "NetIncomeLoss": {
+                        "units": {
+                            "USD": [
+                                _entry("2024-01-01", "2024-03-31", value, frame="CY2024Q1"),
+                            ]
+                        }
+                    },
+                }
+            }
+        }
 
     monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", "Microsoft"))
@@ -447,9 +517,16 @@ from moat.ingest import _row_values, fetch_financials, store_financials
 def test_fetch_financials_touches_no_database(monkeypatch):
     """If it needed a session it could not be parallelised."""
     monkeypatch.setattr(ingest_module, "get_cik", lambda t: ("789019", "Microsoft"))
-    monkeypatch.setattr(ingest_module, "fetch_company_facts", lambda cik: _facts([
-        _entry("2024-01-01", "2024-03-31", 50.0, frame="CY2024Q1"),
-    ], tag="NetIncomeLoss"))
+    monkeypatch.setattr(
+        ingest_module,
+        "fetch_company_facts",
+        lambda cik: _facts(
+            [
+                _entry("2024-01-01", "2024-03-31", 50.0, frame="CY2024Q1"),
+            ],
+            tag="NetIncomeLoss",
+        ),
+    )
 
     def _explode():
         raise AssertionError("fetch_financials opened a database session")
@@ -463,10 +540,12 @@ def test_fetch_financials_touches_no_database(monkeypatch):
 
 def test_fetch_financials_normalizes_the_ticker(monkeypatch):
     seen = []
-    monkeypatch.setattr(ingest_module, "get_cik",
-                        lambda t: (seen.append(t), ("789019", "Microsoft"))[1])
-    monkeypatch.setattr(ingest_module, "fetch_company_facts",
-                        lambda cik: {"facts": {"us-gaap": {}}})
+    monkeypatch.setattr(
+        ingest_module, "get_cik", lambda t: (seen.append(t), ("789019", "Microsoft"))[1]
+    )
+    monkeypatch.setattr(
+        ingest_module, "fetch_company_facts", lambda cik: {"facts": {"us-gaap": {}}}
+    )
     fetch_financials("msft")
     assert seen == ["MSFT"]
 
@@ -475,10 +554,20 @@ def test_store_financials_writes_the_rows(client, monkeypatch):
     from moat.models import Financials
 
     monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
-    series = {k: {} for k in ("revenue", "net_income", "operating_cash_flow",
-                              "capex", "equity", "debt_current",
-                              "debt_noncurrent", "cash",
-                              "short_term_investments")}
+    series = {
+        k: {}
+        for k in (
+            "revenue",
+            "net_income",
+            "operating_cash_flow",
+            "capex",
+            "equity",
+            "debt_current",
+            "debt_noncurrent",
+            "cash",
+            "short_term_investments",
+        )
+    }
     series["net_income"] = {date(2024, 3, 31): 50.0, date(2024, 6, 30): 60.0}
 
     written = store_financials("MSFT", "Microsoft", series)
@@ -495,10 +584,20 @@ def test_store_financials_with_no_periods_writes_nothing(client, monkeypatch):
     from moat.models import Financials
 
     monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
-    series = {k: {} for k in ("revenue", "net_income", "operating_cash_flow",
-                              "capex", "equity", "debt_current",
-                              "debt_noncurrent", "cash",
-                              "short_term_investments")}
+    series = {
+        k: {}
+        for k in (
+            "revenue",
+            "net_income",
+            "operating_cash_flow",
+            "capex",
+            "equity",
+            "debt_current",
+            "debt_noncurrent",
+            "cash",
+            "short_term_investments",
+        )
+    }
     assert store_financials("MSFT", "Microsoft", series) == 0
 
     db = TestingSessionLocal()
@@ -510,10 +609,22 @@ def test_store_financials_with_no_periods_writes_nothing(client, monkeypatch):
 
 # --- _row_values keeps the unknown-is-not-zero rule ---
 
+
 def _series_with(**overrides):
-    base = {k: {} for k in ("revenue", "net_income", "operating_cash_flow",
-                            "capex", "equity", "debt_current",
-                            "debt_noncurrent", "cash", "short_term_investments")}
+    base = {
+        k: {}
+        for k in (
+            "revenue",
+            "net_income",
+            "operating_cash_flow",
+            "capex",
+            "equity",
+            "debt_current",
+            "debt_noncurrent",
+            "cash",
+            "short_term_investments",
+        )
+    }
     period = date(2024, 3, 31)
     for key, value in overrides.items():
         base[key] = {period: value}
@@ -551,16 +662,29 @@ def test_row_values_leaves_debt_null_when_both_absent():
 # company with a long filing history. Cheap against local Postgres, not
 # against a managed database where each carries real latency.
 
+
 def test_financials_are_written_in_one_statement(client, monkeypatch):
     """Counts statements, not rows - the round trips are the cost."""
     monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
-    series = {k: {} for k in ("revenue", "net_income", "operating_cash_flow",
-                              "capex", "equity", "debt_current",
-                              "debt_noncurrent", "cash",
-                              "short_term_investments")}
+    series = {
+        k: {}
+        for k in (
+            "revenue",
+            "net_income",
+            "operating_cash_flow",
+            "capex",
+            "equity",
+            "debt_current",
+            "debt_noncurrent",
+            "cash",
+            "short_term_investments",
+        )
+    }
     series["net_income"] = {
-        date(2024, 3, 31): 10.0, date(2024, 6, 30): 20.0,
-        date(2024, 9, 30): 30.0, date(2024, 12, 31): 40.0,
+        date(2024, 3, 31): 10.0,
+        date(2024, 6, 30): 20.0,
+        date(2024, 9, 30): 30.0,
+        date(2024, 12, 31): 40.0,
     }
 
     executes = []
@@ -590,10 +714,20 @@ def test_bulk_upsert_writes_every_period(client, monkeypatch):
     from moat.models import Financials
 
     monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
-    series = {k: {} for k in ("revenue", "net_income", "operating_cash_flow",
-                              "capex", "equity", "debt_current",
-                              "debt_noncurrent", "cash",
-                              "short_term_investments")}
+    series = {
+        k: {}
+        for k in (
+            "revenue",
+            "net_income",
+            "operating_cash_flow",
+            "capex",
+            "equity",
+            "debt_current",
+            "debt_noncurrent",
+            "cash",
+            "short_term_investments",
+        )
+    }
     series["net_income"] = {date(2024, month, 28): float(month) for month in range(1, 13)}
 
     assert store_financials("MSFT", "Microsoft", series) == 12
@@ -613,9 +747,20 @@ def test_bulk_upsert_updates_a_restated_figure(client, monkeypatch):
     monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
 
     def series_with(value):
-        s = {k: {} for k in ("revenue", "net_income", "operating_cash_flow",
-                             "capex", "equity", "debt_current",
-                             "debt_noncurrent", "cash", "short_term_investments")}
+        s = {
+            k: {}
+            for k in (
+                "revenue",
+                "net_income",
+                "operating_cash_flow",
+                "capex",
+                "equity",
+                "debt_current",
+                "debt_noncurrent",
+                "cash",
+                "short_term_investments",
+            )
+        }
         s["net_income"] = {date(2024, 3, 31): value}
         return s
 
@@ -635,8 +780,17 @@ def test_bulk_upsert_preserves_nulls_on_update(client, monkeypatch):
     from moat.models import Financials
 
     monkeypatch.setattr(ingest_module, "SessionLocal", TestingSessionLocal)
-    keys = ("revenue", "net_income", "operating_cash_flow", "capex", "equity",
-            "debt_current", "debt_noncurrent", "cash", "short_term_investments")
+    keys = (
+        "revenue",
+        "net_income",
+        "operating_cash_flow",
+        "capex",
+        "equity",
+        "debt_current",
+        "debt_noncurrent",
+        "cash",
+        "short_term_investments",
+    )
     period = date(2024, 3, 31)
 
     first = {k: {} for k in keys}
@@ -645,7 +799,7 @@ def test_bulk_upsert_preserves_nulls_on_update(client, monkeypatch):
     store_financials("MSFT", "Microsoft", first)
 
     second = {k: {} for k in keys}
-    second["net_income"] = {period: 50.0}       # revenue no longer reported
+    second["net_income"] = {period: 50.0}  # revenue no longer reported
     store_financials("MSFT", "Microsoft", second)
 
     db = TestingSessionLocal()
@@ -664,6 +818,7 @@ def test_bulk_upsert_preserves_nulls_on_update(client, monkeypatch):
 # went on holding a Company whose id no longer existed - the report write then
 # failed with a foreign key violation naming a company that was never
 # committed.
+
 
 def test_concurrent_company_insert_is_recovered(client, monkeypatch):
     """The loser of the race must adopt the winner's row, not raise."""
@@ -699,10 +854,20 @@ def test_concurrent_company_insert_is_recovered(client, monkeypatch):
 
     monkeypatch.setattr(ingest_module, "SessionLocal", _RacingSession)
 
-    series = {k: {} for k in ("revenue", "net_income", "operating_cash_flow",
-                              "capex", "equity", "debt_current",
-                              "debt_noncurrent", "cash",
-                              "short_term_investments")}
+    series = {
+        k: {}
+        for k in (
+            "revenue",
+            "net_income",
+            "operating_cash_flow",
+            "capex",
+            "equity",
+            "debt_current",
+            "debt_noncurrent",
+            "cash",
+            "short_term_investments",
+        )
+    }
     series["net_income"] = {date(2024, 3, 31): 10.0}
 
     written = store_financials("RACE", "Racer", series)
@@ -713,8 +878,8 @@ def test_concurrent_company_insert_is_recovered(client, monkeypatch):
         companies = db.query(_Company).filter(_Company.ticker == "RACE").all()
         assert len(companies) == 1, "the race produced a duplicate company"
         from moat.models import Financials
-        rows = db.query(Financials).filter(
-            Financials.company_id == companies[0].id).all()
+
+        rows = db.query(Financials).filter(Financials.company_id == companies[0].id).all()
         assert len(rows) == 1, "financials were attached to the wrong company"
     finally:
         db.close()

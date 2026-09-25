@@ -37,7 +37,7 @@ def test_get_db_closes_the_session():
     try:
         gen = database.get_db()
         next(gen)
-        list(gen)          # exhaust, triggering the finally
+        list(gen)  # exhaust, triggering the finally
     except StopIteration:
         pass
     finally:

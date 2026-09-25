@@ -78,8 +78,7 @@ def get_price(ticker: str) -> dict | None:
         # yfinance is unofficial and fails in many shapes - HTTP errors, JSON
         # decode errors, schema changes. Log the cause rather than swallowing
         # it entirely, then degrade.
-        logger.warning("price lookup failed for %s: %s: %s",
-                       ticker, type(exc).__name__, exc)
+        logger.warning("price lookup failed for %s: %s: %s", ticker, type(exc).__name__, exc)
         return None
 
     if data is None:

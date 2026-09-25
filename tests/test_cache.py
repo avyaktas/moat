@@ -40,8 +40,8 @@ def test_evicts_least_recently_used():
     c = cache.TTLCache(ttl_seconds=60, max_entries=2)
     c.set("a", 1)
     c.set("b", 2)
-    c.get("a")            # 'a' is now the most recently used
-    c.set("c", 3)         # evicts 'b'
+    c.get("a")  # 'a' is now the most recently used
+    c.set("c", 3)  # evicts 'b'
 
     assert c.get("a") == 1
     assert c.get("b") is None

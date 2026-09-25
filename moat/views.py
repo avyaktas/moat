@@ -375,8 +375,7 @@ def _figures(ttm: dict, valuation: dict, price: dict | None) -> str:
         ("Market cap", money(valuation.get("market_cap")), None),
         ("P / FCF", mult(valuation.get("p_fcf")), None),
         ("P / E", mult(valuation.get("p_e")), None),
-        ("Share price",
-         f"${share_price:,.2f}" if share_price is not None else EM_DASH, None),
+        ("Share price", f"${share_price:,.2f}" if share_price is not None else EM_DASH, None),
     ]
 
     cells = []
@@ -865,9 +864,7 @@ _REPORT_CSS = """
 
 def _pending(label: str) -> str:
     """A narrative section the model has not finished writing yet."""
-    return (
-        f'<p class="pending"><span class="pending-dot"></span>{esc(label)}</p>'
-    )
+    return f'<p class="pending"><span class="pending-dot"></span>{esc(label)}</p>'
 
 
 VERDICT_CLASS = {"BUY-CASE": "buy", "WATCH-CASE": "watch", "AVOID-CASE": "avoid"}
@@ -944,8 +941,7 @@ def _report_sheet(report: dict, pending: bool = False) -> str:
     filing_url = sources.get("filing")
     if filing_url:
         filing_line = (
-            f'<a href="{esc(filing_url)}">10-K filed '
-            f'{esc(sources.get("report_date"))}</a>'
+            f'<a href="{esc(filing_url)}">10-K filed {esc(sources.get("report_date"))}</a>'
         )
     else:
         filing_line = "10-K unavailable"
@@ -957,7 +953,8 @@ def _report_sheet(report: dict, pending: bool = False) -> str:
     price_block = (
         f'<div><span class="price-label">Share price</span>'
         f'<span class="price num">{share_price}</span></div>'
-        if share_price else ""
+        if share_price
+        else ""
     )
 
     # id="sheet" on every rendering of the sheet, not just the shell's. The
@@ -997,33 +994,40 @@ def _report_sheet(report: dict, pending: bool = False) -> str:
 
   <section>
     <h2>Hype versus reality</h2>
-    <div class="prose lede">{_pending("Writing analysis\u2026") if pending
-        else _paragraphs(narrative.get("hype_vs_reality"))}</div>
+    <div class="prose lede">{
+        _pending("Writing analysis\u2026")
+        if pending
+        else _paragraphs(narrative.get("hype_vs_reality"))
+    }</div>
   </section>
 
   <section>
     <h2>Risks and sell triggers</h2>
-    {_pending("Reading the risk factors\u2026") if pending
-        else _risks(narrative.get("risks", []))}
+    {_pending("Reading the risk factors\u2026") if pending else _risks(narrative.get("risks", []))}
   </section>
 
   <section>
     <h2>The case</h2>
-    <div class="prose">{_pending("Writing analysis\u2026") if pending
-        else _paragraphs(narrative.get("reasoning"))}</div>
+    <div class="prose">{
+        _pending("Writing analysis\u2026") if pending else _paragraphs(narrative.get("reasoning"))
+    }</div>
   </section>
 
   <section>
     <h2>The strategy</h2>
-    <div class="prose">{_pending("Writing analysis\u2026") if pending
-        else _paragraphs(narrative.get("strategy"))}</div>
+    <div class="prose">{
+        _pending("Writing analysis\u2026") if pending else _paragraphs(narrative.get("strategy"))
+    }</div>
   </section>
 
   <footer>
     <p>Financials from {esc(sources.get("financials"))}.
        Price from {esc(sources.get("price"))}.</p>
-    <p>Filing: {filing_line}{"" if pending else
-       f" &middot; {grounding_str} of quotes verified against the source document."}</p>
+    <p>Filing: {filing_line}{
+        ""
+        if pending
+        else f" &middot; {grounding_str} of quotes verified against the source document."
+    }</p>
     <p>{"Cached" if cache.get("cached") else "Generated"}
        {_timestamp(cache.get("generated_at"))}</p>
     <p class="disclaimer">This is a screen against stated criteria, not
@@ -1079,14 +1083,16 @@ def render_report(report: dict) -> str:
     narrative = report.get("narrative") or {}
     verdict = narrative.get("verdict", "NO VERDICT")
     body = (
-        _topbar(str(report.get("company") or ""), str(report.get("name") or ""),
-                verdict, VERDICT_CLASS.get(verdict, "none"))
+        _topbar(
+            str(report.get("company") or ""),
+            str(report.get("name") or ""),
+            verdict,
+            VERDICT_CLASS.get(verdict, "none"),
+        )
         + _report_sheet(report)
         + THEME_SCRIPT
     )
-    return _document(
-        f'{esc(report.get("company"))} \u00b7 Moat', body, _REPORT_CSS
-    )
+    return _document(f"{esc(report.get('company'))} \u00b7 Moat", body, _REPORT_CSS)
 
 
 # ---------------------------------------------------------------- landing page
@@ -1478,15 +1484,14 @@ def _skeleton_sheet(ticker: str) -> str:
     checks = "".join(
         f'<div class="check">'
         f'<div class="check-top">{_sk("sk-title sk-w55")}'
-        f'{_sk("sk-line sk-w40")}</div>'
+        f"{_sk('sk-line sk-w40')}</div>"
         f'<p class="check-detail">{_sk("sk-line sk-w100")}'
-        f'{_sk("sk-line sk-w70")}</p>'
+        f"{_sk('sk-line sk-w70')}</p>"
         f"</div>"
         for _ in range(6)
     )
     figures = "".join(
-        f'<div class="fig">{_sk("sk-line sk-w70")}{_sk("sk-value sk-w55")}</div>'
-        for _ in range(12)
+        f'<div class="fig">{_sk("sk-line sk-w70")}{_sk("sk-value sk-w55")}</div>' for _ in range(12)
     )
     rows = "".join(
         f'<tr><th scope="row">{_sk("sk-line sk-w55")}</th>'
@@ -1591,10 +1596,13 @@ def render_report_shell(ticker: str) -> str:
     """
     safe = esc(ticker.upper())
     stream_url = json.dumps(f"/company/{ticker.upper()}/report/stream")
-    lost = json.dumps(render_failure(
-        "Connection lost",
-        "The connection to the server dropped before the report was finished. "
-        "Reloading will pick up from wherever it got to."))
+    lost = json.dumps(
+        render_failure(
+            "Connection lost",
+            "The connection to the server dropped before the report was finished. "
+            "Reloading will pick up from wherever it got to.",
+        )
+    )
 
     body = f"""
 {_topbar(safe, "", "PENDING", "none")}

@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+
 # Real tickers are short and alphanumeric, allowing the dot and dash that
 # appear in class shares (BRK.B, BF-B). Bounding the shape here rejects junk
 # at the edge, before it costs a database round trip or an SEC lookup, and
@@ -78,15 +79,13 @@ def _client_key(request: Request) -> str:
 def _enforce_rate_limit(request: Request) -> None:
     """Reject a caller who is spending faster than the configured rate."""
     key = _client_key(request)
-    if ratelimit.allow(key, settings.rate_limit_burst,
-                       settings.rate_limit_per_minute):
+    if ratelimit.allow(key, settings.rate_limit_burst, settings.rate_limit_per_minute):
         return
     retry = ratelimit.retry_after_seconds(settings.rate_limit_per_minute)
     logger.warning("rate limit hit by %s on %s", key, request.url.path)
     raise HTTPException(
         status_code=429,
-        detail="Too many requests. This endpoint generates a paid analysis; "
-               "please slow down.",
+        detail="Too many requests. This endpoint generates a paid analysis; please slow down.",
         headers={"Retry-After": str(retry)},
     )
 
@@ -128,21 +127,19 @@ elif not settings.refresh_token.strip():
     # An exposed deployment with no refresh token is the case worth warning
     # about: anyone can force unlimited paid regeneration.
     logger.warning(
-        "refresh_token is not set: ?refresh= can force paid regeneration "
-        "without a credential"
+        "refresh_token is not set: ?refresh= can force paid regeneration without a credential"
     )
 
 
-TickerPath = Annotated[
-    str, Path(min_length=1, max_length=10, pattern=r"^[A-Za-z0-9.\-]+$")
-]
+TickerPath = Annotated[str, Path(min_length=1, max_length=10, pattern=r"^[A-Za-z0-9.\-]+$")]
 
 DEFAULT_COMPANIES_PAGE = 100
 MAX_COMPANIES_PAGE = 500
 
+
 def get_or_ingest_company(ticker: str, db: Session) -> Company:
     """Return the company, ingesting it on first request.
-    Read through cache: known tickers are served from Postgres, 
+    Read through cache: known tickers are served from Postgres,
     unknown ones trigger a live EDGAR fetch, after which they are cached.
     Tickers the SEC has never heard of still 404."""
     ticker = ticker.upper()
@@ -157,9 +154,7 @@ def get_or_ingest_company(ticker: str, db: Session) -> Company:
         # amount of retrying will produce this company. `from None` because
         # this is expected control flow, not an error worth chaining a
         # traceback onto.
-        raise HTTPException(
-            status_code=404, detail=f"Unknown ticker: {ticker}"
-        ) from None
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}") from None
     except requests.RequestException as exc:
         # The SEC was unreachable, slow, or throttling - it rate-limits at
         # 10 req/s, so a 429 is an ordinary event rather than an exception.
@@ -193,7 +188,6 @@ def _fetch_filing(ticker: str) -> dict | None:
     except requests.RequestException as exc:
         logger.warning("SEC unavailable while fetching filing for %s: %s", ticker, exc)
         return None
-    
 
 
 def _is_html_route(path: str) -> bool:
@@ -234,6 +228,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 def read_root():
     return render_landing()
 
+
 @app.get("/health")
 def read_health(db: Session = Depends(get_db)):
     """Report whether this instance can actually serve a request.
@@ -256,6 +251,7 @@ def read_health(db: Session = Depends(get_db)):
         )
     return {"status": "ok"}
 
+
 @app.get("/companies", response_model=list[CompanyOut])
 def list_companies(
     limit: Annotated[int, Query(ge=1, le=MAX_COMPANIES_PAGE)] = DEFAULT_COMPANIES_PAGE,
@@ -269,22 +265,20 @@ def list_companies(
     repeat or skip rows between pages, since Postgres is under no obligation
     to return them in the same order twice.
     """
-    rows = (
-        db.query(Company)
-        .order_by(Company.id)
-        .limit(limit)
-        .offset(offset)
-        .all()
-    )
-    return [
-        {"id": r.id, "ticker": r.ticker, "name": r.name, "sector": r.sector}
-        for r in rows
-    ]
+    rows = db.query(Company).order_by(Company.id).limit(limit).offset(offset).all()
+    return [{"id": r.id, "ticker": r.ticker, "name": r.name, "sector": r.sector} for r in rows]
+
 
 @app.get("/company/{ticker}", response_model=CompanyOut)
 def get_ticker(ticker: TickerPath, db: Session = Depends(get_db)):
     company = get_or_ingest_company(ticker, db)
-    return {"id": company.id, "ticker": company.ticker, "name": company.name, "sector": company.sector}
+    return {
+        "id": company.id,
+        "ticker": company.ticker,
+        "name": company.name,
+        "sector": company.sector,
+    }
+
 
 @app.get("/company/{ticker}/financials", response_model=list[FinancialsOut])
 def get_financials(ticker: TickerPath, db: Session = Depends(get_db)):
@@ -296,16 +290,17 @@ def get_financials(ticker: TickerPath, db: Session = Depends(get_db)):
         .all()
     )
     return [
-    {
-        "period_end": r.period_end,
-        "revenue": r.revenue,
-        "net_income": r.net_income,
-        "free_cash_flow": r.free_cash_flow,
-        "total_debt": r.total_debt,
-        "shareholders_equity": r.shareholders_equity,
-    }
-    for r in rows
-]
+        {
+            "period_end": r.period_end,
+            "revenue": r.revenue,
+            "net_income": r.net_income,
+            "free_cash_flow": r.free_cash_flow,
+            "total_debt": r.total_debt,
+            "shareholders_equity": r.shareholders_equity,
+        }
+        for r in rows
+    ]
+
 
 @app.get("/company/{ticker}/metrics", response_model=MetricsOut)
 def get_metrics(ticker: TickerPath, db: Session = Depends(get_db)):
@@ -316,7 +311,7 @@ def get_metrics(ticker: TickerPath, db: Session = Depends(get_db)):
         .order_by(Financials.period_end.desc())
         .all()
     )
-    
+
     quarterly = [
         {
             "period_end": r.period_end,
@@ -345,7 +340,9 @@ def get_metrics(ticker: TickerPath, db: Session = Depends(get_db)):
     return {"quarterly": quarterly, "ttm": ttm_block}
 
 
-DEFAULT_QUESTION = "What are the most significant risks this company identifies, and how does it describe them?"
+DEFAULT_QUESTION = (
+    "What are the most significant risks this company identifies, and how does it describe them?"
+)
 
 # Long enough for any real question, and far below the ~2704-byte ceiling
 # Postgres puts on a btree entry. question is part of uq_company_question, and
@@ -398,10 +395,14 @@ def _brief_is_current(ticker: str, cached: Brief) -> bool:
 
 
 @app.get("/company/{ticker}/brief", response_model=BriefOut)
-def get_brief(request: Request, ticker: TickerPath,
-              question: QuestionQuery = DEFAULT_QUESTION,
-              refresh: bool = False, token: str | None = None,
-              db: Session = Depends(get_db)):
+def get_brief(
+    request: Request,
+    ticker: TickerPath,
+    question: QuestionQuery = DEFAULT_QUESTION,
+    refresh: bool = False,
+    token: str | None = None,
+    db: Session = Depends(get_db),
+):
     _enforce_rate_limit(request)
     refresh = _refresh_requested(refresh, token)
     company = get_or_ingest_company(ticker, db)
@@ -409,9 +410,7 @@ def get_brief(request: Request, ticker: TickerPath,
     # Cache check first: on a hit the only upstream work is a freshness
     # probe, which find_latest_10k serves from its own cache most of the time.
     cached = (
-        db.query(Brief)
-        .filter(Brief.company_id == company.id, Brief.question == question)
-        .first()
+        db.query(Brief).filter(Brief.company_id == company.id, Brief.question == question).first()
     )
     if cached is not None and not refresh and _brief_is_current(company.ticker, cached):
         logger.info("brief cache hit for %s", company.ticker)
@@ -420,8 +419,7 @@ def get_brief(request: Request, ticker: TickerPath,
     try:
         cik, _ = get_cik(company.ticker)
     except requests.RequestException as exc:
-        logger.warning("SEC unavailable during CIK lookup for %s: %s",
-                       company.ticker, exc)
+        logger.warning("SEC unavailable during CIK lookup for %s: %s", company.ticker, exc)
         raise HTTPException(
             status_code=502,
             detail="SEC EDGAR is unavailable right now; please try again shortly.",
@@ -431,8 +429,7 @@ def get_brief(request: Request, ticker: TickerPath,
     try:
         filing = get_risk_factors(cik)
     except requests.RequestException as exc:
-        logger.warning("SEC unavailable while fetching filing for %s: %s",
-                       company.ticker, exc)
+        logger.warning("SEC unavailable while fetching filing for %s: %s", company.ticker, exc)
         raise HTTPException(
             status_code=502,
             detail="SEC EDGAR is unavailable right now; please try again shortly.",
@@ -441,11 +438,16 @@ def get_brief(request: Request, ticker: TickerPath,
     if filing is None:
         raise HTTPException(status_code=404, detail="No 10-K filing found")
 
-    logger.info("brief cache miss for %s: analysing filing %s",
-                company.ticker, filing["report_date"])
+    logger.info(
+        "brief cache miss for %s: analysing filing %s", company.ticker, filing["report_date"]
+    )
     result = answer_question(question, filing["text"])
-    logger.info("brief for %s: addressed=%s grounding=%s",
-                company.ticker, result["addressed"], result["grounding_rate"])
+    logger.info(
+        "brief for %s: addressed=%s grounding=%s",
+        company.ticker,
+        result["addressed"],
+        result["grounding_rate"],
+    )
 
     values = {
         "company_id": company.id,
@@ -457,19 +459,22 @@ def get_brief(request: Request, ticker: TickerPath,
         "filing_url": filing["url"],
         "report_date": filing["report_date"],
     }
-    stmt = pg_insert(Brief).values(**values).on_conflict_do_update(
-        constraint="uq_company_question",
-        set_={k: v for k, v in values.items() if k not in ("company_id", "question")},
+    stmt = (
+        pg_insert(Brief)
+        .values(**values)
+        .on_conflict_do_update(
+            constraint="uq_company_question",
+            set_={k: v for k, v in values.items() if k not in ("company_id", "question")},
+        )
     )
     db.execute(stmt)
     db.commit()
 
     brief = (
-        db.query(Brief)
-        .filter(Brief.company_id == company.id, Brief.question == question)
-        .first()
+        db.query(Brief).filter(Brief.company_id == company.id, Brief.question == question).first()
     )
     return _brief_to_dict(brief)
+
 
 def _brief_to_dict(b: Brief) -> dict:
     return {
@@ -544,6 +549,7 @@ def _cache_headers(etag: str) -> dict[str, str]:
         "Cache-Control": f"public, max-age={REPORT_CLIENT_MAX_AGE}, must-revalidate",
     }
 
+
 # One try plus one retry. A second failure means the outage is not a blip,
 # and a caller waiting on a report would rather have the computed figures now
 # than a third attempt's latency.
@@ -581,10 +587,17 @@ def _is_retryable(exc: Exception) -> bool:
         # what a retry is for.
         return True
     return status not in NON_RETRYABLE_STATUS
+
+
 @app.get("/company/{ticker}/report", response_model=ReportOut)
-def get_report(request: Request, response: Response, ticker: TickerPath,
-               refresh: bool = False, token: str | None = None,
-               db: Session = Depends(get_db)):
+def get_report(
+    request: Request,
+    response: Response,
+    ticker: TickerPath,
+    refresh: bool = False,
+    token: str | None = None,
+    db: Session = Depends(get_db),
+):
     _enforce_rate_limit(request)
     refresh = _refresh_requested(refresh, token)
 
@@ -612,8 +625,11 @@ def get_report(request: Request, response: Response, ticker: TickerPath,
             if request.headers.get("if-none-match") == etag:
                 return Response(status_code=304, headers=_cache_headers(etag))
 
-            logger.info("report cache hit for %s, age %.1f days",
-                        company.ticker, age.total_seconds() / 86400)
+            logger.info(
+                "report cache hit for %s, age %.1f days",
+                company.ticker,
+                age.total_seconds() / 86400,
+            )
             payload = json.loads(cached.payload)
             payload["cache"] = {
                 "cached": True,
@@ -624,8 +640,7 @@ def get_report(request: Request, response: Response, ticker: TickerPath,
             return payload
 
     # cache miss or stale: build it
-    logger.info("report cache miss for %s (refresh=%s): rebuilding",
-                ticker, refresh)
+    logger.info("report cache miss for %s (refresh=%s): rebuilding", ticker, refresh)
     if timing.current() is None:
         # No enclosing breakdown (the JSON endpoint called directly). Open one
         # so an uncached build always reports where its time went.
@@ -653,9 +668,7 @@ def _prefetch_for_report(ticker: str, need_financials: bool) -> pipeline.Prefetc
         # The SEC's ticker file does not list it - a real 404, as in
         # get_or_ingest_company. `from None` because this is expected control
         # flow rather than an error worth a traceback.
-        raise HTTPException(
-            status_code=404, detail=f"Unknown ticker: {ticker}"
-        ) from None
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}") from None
     except requests.RequestException as exc:
         logger.warning("SEC unavailable while ingesting %s: %s", ticker, exc)
         raise HTTPException(
@@ -664,8 +677,9 @@ def _prefetch_for_report(ticker: str, need_financials: bool) -> pipeline.Prefetc
         ) from exc
 
 
-def _report_events(response: Response, ticker: str, company: Company | None,
-                   refresh: bool, db: Session):
+def _report_events(
+    response: Response, ticker: str, company: Company | None, refresh: bool, db: Session
+):
     """Build a report, yielding progress as each stage actually completes.
 
     A generator rather than a function because two callers want different
@@ -687,8 +701,9 @@ def _report_events(response: Response, ticker: str, company: Company | None,
     yield pipeline.Stage("fetch", pipeline.STAGE_LABELS["fetch"], "running")
     mark = time.perf_counter()
     fetched = _prefetch_for_report(ticker, need_financials=company is None)
-    yield pipeline.Stage("fetch", pipeline.STAGE_LABELS["fetch"], "done",
-                         seconds=time.perf_counter() - mark)
+    yield pipeline.Stage(
+        "fetch", pipeline.STAGE_LABELS["fetch"], "done", seconds=time.perf_counter() - mark
+    )
 
     if fetched.series is not None:
         logger.info("ingesting %s: not seen before", ticker)
@@ -704,8 +719,9 @@ def _report_events(response: Response, ticker: str, company: Company | None,
         company = db.query(Company).filter(Company.ticker == ticker).first()
         if company is None:
             raise HTTPException(status_code=502, detail="Ingestion failed")
-        yield pipeline.Stage("store", pipeline.STAGE_LABELS["store"], "done",
-                             seconds=time.perf_counter() - mark)
+        yield pipeline.Stage(
+            "store", pipeline.STAGE_LABELS["store"], "done", seconds=time.perf_counter() - mark
+        )
     else:
         yield pipeline.Stage("store", pipeline.STAGE_LABELS["store"], "skipped")
 
@@ -726,8 +742,9 @@ def _report_events(response: Response, ticker: str, company: Company | None,
         data = build_report_data(rows, fetched.price)
     if "error" in data:
         raise HTTPException(status_code=404, detail=data["error"])
-    yield pipeline.Stage("metrics", pipeline.STAGE_LABELS["metrics"], "done",
-                         seconds=time.perf_counter() - mark)
+    yield pipeline.Stage(
+        "metrics", pipeline.STAGE_LABELS["metrics"], "done", seconds=time.perf_counter() - mark
+    )
 
     filing = fetched.filing
 
@@ -772,8 +789,12 @@ def _report_events(response: Response, ticker: str, company: Company | None,
                 failure_detail = _synthesis_failure_detail(exc)
                 logger.warning(
                     "synthesis attempt %d/%d failed for %s: %s: %s (retryable=%s)",
-                    attempt + 1, SYNTHESIS_ATTEMPTS, company.ticker,
-                    type(exc).__name__, exc, retryable,
+                    attempt + 1,
+                    SYNTHESIS_ATTEMPTS,
+                    company.ticker,
+                    type(exc).__name__,
+                    exc,
+                    retryable,
                 )
                 if not retryable:
                     # Giving up now saves a second full-length call that would
@@ -782,17 +803,20 @@ def _report_events(response: Response, ticker: str, company: Company | None,
                 if not last:
                     # Back off before retrying; never sleep after the final
                     # attempt, which would delay the response for nothing.
-                    time.sleep(SYNTHESIS_BACKOFF_SECONDS * (2 ** attempt))
+                    time.sleep(SYNTHESIS_BACKOFF_SECONDS * (2**attempt))
                 # final failure: narrative stays None and the report degrades
         yield pipeline.Stage(
-            "synthesis", pipeline.STAGE_LABELS["synthesis"],
+            "synthesis",
+            pipeline.STAGE_LABELS["synthesis"],
             "done" if narrative is not None else "failed",
             seconds=time.perf_counter() - mark,
             detail=None if narrative is not None else failure_detail,
         )
     else:
         yield pipeline.Stage(
-            "synthesis", pipeline.STAGE_LABELS["synthesis"], "failed",
+            "synthesis",
+            pipeline.STAGE_LABELS["synthesis"],
+            "failed",
             detail="No 10-K filing was available for this company.",
         )
 
@@ -805,18 +829,24 @@ def _report_events(response: Response, ticker: str, company: Company | None,
     # but skip the write so the next request retries the narrative.
     now = datetime.now(UTC)
     if narrative is not None:
-        logger.info("report for %s: verdict=%s grounding=%s",
-                    company.ticker, narrative.get("verdict"),
-                    narrative.get("grounding_rate"))
+        logger.info(
+            "report for %s: verdict=%s grounding=%s",
+            company.ticker,
+            narrative.get("verdict"),
+            narrative.get("grounding_rate"),
+        )
         payload_json = json.dumps(payload, default=to_jsonable)
-        stmt = pg_insert(Report).values(
-            company_id=company.id,
-            payload=payload_json,
-            generated_at=now,
-        ).on_conflict_do_update(
-            constraint="uq_report_company",
-            set_={"payload": payload_json,
-                  "generated_at": now},
+        stmt = (
+            pg_insert(Report)
+            .values(
+                company_id=company.id,
+                payload=payload_json,
+                generated_at=now,
+            )
+            .on_conflict_do_update(
+                constraint="uq_report_company",
+                set_={"payload": payload_json, "generated_at": now},
+            )
         )
         with timing.stage("db.report_write"):
             db.execute(stmt)
@@ -854,8 +884,14 @@ def _synthesis_failure_detail(exc: Exception) -> str:
     return "The analysis could not be generated."
 
 
-def _build_report(request: Request, response: Response, ticker: str,
-                  company: Company | None, refresh: bool, db: Session):
+def _build_report(
+    request: Request,
+    response: Response,
+    ticker: str,
+    company: Company | None,
+    refresh: bool,
+    db: Session,
+):
     """Drive the build to completion and return the payload.
 
     The JSON endpoint wants only the end of the sequence; the progress events
@@ -879,8 +915,13 @@ def _sse(event: str, payload: dict) -> str:
 
 
 @app.get("/company/{ticker}/report/stream")
-def stream_report(request: Request, ticker: TickerPath, refresh: bool = False,
-                  token: str | None = None, db: Session = Depends(get_db)):
+def stream_report(
+    request: Request,
+    ticker: TickerPath,
+    refresh: bool = False,
+    token: str | None = None,
+    db: Session = Depends(get_db),
+):
     """Build a report, reporting each stage as it actually completes.
 
     The page opens this as an EventSource. It emits `stage` as each step
@@ -907,42 +948,47 @@ def stream_report(request: Request, ticker: TickerPath, refresh: bool = False,
             # survive to the next step. The per-stage lines still log; the
             # aggregate breakdown belongs to the JSON path, which runs
             # straight through.
-            company = (
-                db.query(Company).filter(Company.ticker == normalized).first()
-            )
-            for event in _report_events(
-                sink, normalized, company, resolved_refresh, db
-            ):
+            company = db.query(Company).filter(Company.ticker == normalized).first()
+            for event in _report_events(sink, normalized, company, resolved_refresh, db):
                 if isinstance(event, pipeline.Stage):
                     yield _sse("stage", event.as_dict())
                 elif isinstance(event, pipeline.Partial):
-                    yield _sse("partial", {
-                        "html": render_report_fragment(
-                            event.payload, pending=True
-                        ),
-                    })
+                    yield _sse(
+                        "partial",
+                        {
+                            "html": render_report_fragment(event.payload, pending=True),
+                        },
+                    )
                 elif isinstance(event, pipeline.Result):
-                    yield _sse("done", {
-                        "html": render_report_fragment(event.payload),
-                    })
+                    yield _sse(
+                        "done",
+                        {
+                            "html": render_report_fragment(event.payload),
+                        },
+                    )
         except HTTPException as exc:
-            yield _sse("failed", {
-                "status": exc.status_code,
-                "html": render_failure(_failure_title(exc.status_code),
-                                       str(exc.detail)),
-            })
+            yield _sse(
+                "failed",
+                {
+                    "status": exc.status_code,
+                    "html": render_failure(_failure_title(exc.status_code), str(exc.detail)),
+                },
+            )
         except Exception:
             # Nothing may escape a streaming response: once the body has
             # begun, an unhandled exception truncates it and the page waits
             # forever on an event that will never arrive.
             logger.exception("report stream failed for %s", normalized)
-            yield _sse("failed", {
-                "status": 500,
-                "html": render_failure(
-                    "Something went wrong",
-                    "The report could not be generated. This has been logged.",
-                ),
-            })
+            yield _sse(
+                "failed",
+                {
+                    "status": 500,
+                    "html": render_failure(
+                        "Something went wrong",
+                        "The report could not be generated. This has been logged.",
+                    ),
+                },
+            )
 
     return StreamingResponse(
         events(),
@@ -969,9 +1015,14 @@ def _failure_title(status: int) -> str:
 
 
 @app.get("/company/{ticker}/report/view", response_class=HTMLResponse)
-def get_report_view(request: Request, response: Response, ticker: TickerPath,
-                    refresh: bool = False, token: str | None = None,
-                    db: Session = Depends(get_db)):
+def get_report_view(
+    request: Request,
+    response: Response,
+    ticker: TickerPath,
+    refresh: bool = False,
+    token: str | None = None,
+    db: Session = Depends(get_db),
+):
     """The tearsheet: served whole when cached, built live when not.
 
     A fresh cached report renders immediately, conditional requests and all -
@@ -990,30 +1041,23 @@ def get_report_view(request: Request, response: Response, ticker: TickerPath,
     normalized = ticker.upper()
     company = db.query(Company).filter(Company.ticker == normalized).first()
     if company is not None and not refresh:
-        cached = (
-            db.query(Report).filter(Report.company_id == company.id).first()
-        )
+        cached = db.query(Report).filter(Report.company_id == company.id).first()
         if cached is not None:
             age = datetime.now(UTC) - _as_utc(cached.generated_at)
             if age < REPORT_MAX_AGE:
-                report = get_report(request, response, ticker, refresh=refresh,
-                                    token=token, db=db)
+                report = get_report(request, response, ticker, refresh=refresh, token=token, db=db)
                 # A conditional request short-circuits to 304 before a payload
                 # exists; pass that straight through rather than rendering it.
                 if isinstance(report, Response):
                     return report
-                return HTMLResponse(render_report(report),
-                                    headers=dict(response.headers))
+                return HTMLResponse(render_report(report), headers=dict(response.headers))
 
     try:
         get_cik(normalized)
     except ValueError:
-        raise HTTPException(
-            status_code=404, detail=f"Unknown ticker: {normalized}"
-        ) from None
+        raise HTTPException(status_code=404, detail=f"Unknown ticker: {normalized}") from None
     except requests.RequestException as exc:
-        logger.warning("SEC unavailable during CIK lookup for %s: %s",
-                       normalized, exc)
+        logger.warning("SEC unavailable during CIK lookup for %s: %s", normalized, exc)
         raise HTTPException(
             status_code=502,
             detail="SEC EDGAR is unavailable right now; please try again shortly.",

@@ -33,29 +33,31 @@ DATE_FORMAT = "%Y-%m-%dT%H:%M:%S"
 
 def configure_logging(level: str = "INFO") -> None:
     """Install a single stdout handler for the application and uvicorn."""
-    dictConfig({
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "standard": {"format": FORMAT, "datefmt": DATE_FORMAT},
-        },
-        "handlers": {
-            "stdout": {
-                "class": "logging.StreamHandler",
-                "formatter": "standard",
-                "stream": sys.stdout,
+    dictConfig(
+        {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {
+                "standard": {"format": FORMAT, "datefmt": DATE_FORMAT},
             },
-        },
-        "root": {"handlers": ["stdout"], "level": level},
-        "loggers": {
-            # Uvicorn's own loggers, routed through the same handler so the
-            # access log and the application log read as one stream.
-            "uvicorn": {"handlers": ["stdout"], "level": level, "propagate": False},
-            "uvicorn.error": {"handlers": ["stdout"], "level": level, "propagate": False},
-            "uvicorn.access": {"handlers": ["stdout"], "level": level, "propagate": False},
-            # Chatty at DEBUG and rarely what we want to read.
-            "httpx": {"level": "WARNING"},
-            "urllib3": {"level": "WARNING"},
-        },
-    })
+            "handlers": {
+                "stdout": {
+                    "class": "logging.StreamHandler",
+                    "formatter": "standard",
+                    "stream": sys.stdout,
+                },
+            },
+            "root": {"handlers": ["stdout"], "level": level},
+            "loggers": {
+                # Uvicorn's own loggers, routed through the same handler so the
+                # access log and the application log read as one stream.
+                "uvicorn": {"handlers": ["stdout"], "level": level, "propagate": False},
+                "uvicorn.error": {"handlers": ["stdout"], "level": level, "propagate": False},
+                "uvicorn.access": {"handlers": ["stdout"], "level": level, "propagate": False},
+                # Chatty at DEBUG and rarely what we want to read.
+                "httpx": {"level": "WARNING"},
+                "urllib3": {"level": "WARNING"},
+            },
+        }
+    )
     logging.getLogger(__name__).debug("logging configured at %s", level)

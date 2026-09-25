@@ -77,6 +77,7 @@ def clear_filing_caches() -> None:
     _latest_10k_cache.clear()
     _risk_factors_cache.clear()
 
+
 def _loose(phrase: str) -> re.Pattern:
     """Build a regex matching a phrase with arbitrary whitespace anywhere.
 
@@ -169,7 +170,7 @@ def extract_section(text: str, start_phrase: str, end_phrase: str) -> str | None
         following = [e for e in ends if e > start]
         if not following:
             continue
-        span = text[start:following[0]]
+        span = text[start : following[0]]
         if best is None or len(span) > len(best):
             best = span
 

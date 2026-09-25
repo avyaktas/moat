@@ -83,6 +83,7 @@ def test_stage_in_a_worker_thread_records_with_bind_context():
     Without bind_context a parallelised stage records nothing, and the
     breakdown under-reports silently rather than failing.
     """
+
     def work():
         with timing.stage("threaded"):
             pass
@@ -96,6 +97,7 @@ def test_stage_in_a_worker_thread_records_with_bind_context():
 def test_binding_must_happen_in_the_calling_thread():
     """Copying the context inside the worker captures the worker's own empty
     context. It raises no error and records nothing, so it is pinned here."""
+
     def work():
         with timing.stage("threaded"):
             pass
@@ -109,6 +111,7 @@ def test_binding_must_happen_in_the_calling_thread():
 
 def test_stage_in_a_bare_thread_records_nothing():
     """Documents the trap that run_in_context exists to avoid."""
+
     def work():
         with timing.stage("threaded"):
             pass
@@ -124,6 +127,7 @@ def test_stage_in_a_bare_thread_records_nothing():
 # The parallel prefetch contains the fetches that run inside it. Summing every
 # stage would double-count them and make the unaccounted remainder look like
 # zero when it is really negative.
+
 
 def test_nested_stages_record_their_depth():
     with timing.track("t") as t:
@@ -157,6 +161,7 @@ def test_other_counts_only_top_level_stages():
 
 def test_depth_survives_a_thread_boundary():
     """A fetch inside the prefetch must record as nested, not as top level."""
+
     def work():
         with timing.stage("inside_worker"):
             pass
@@ -183,11 +188,12 @@ def test_reset_tolerates_a_context_that_moved():
         return var.set("value")
 
     token = contextvars.copy_context().run(take_token)
-    timing._reset(var, token)   # must not raise
+    timing._reset(var, token)  # must not raise
 
 
 def test_a_generator_spanning_yields_does_not_explode():
     """The exact shape that failed: track() around a generator's yields."""
+
     def gen():
         with timing.track("streamed"):
             yield 1

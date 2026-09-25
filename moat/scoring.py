@@ -40,13 +40,13 @@ WHAT EACH CHECK MEANS
 from dataclasses import dataclass, field
 
 THRESHOLDS = {
-    "roic_quality": 0.15,          # TTM ROIC above this suggests durable advantage
-    "net_margin_floor": 0.10,      # minimum acceptable profitability
+    "roic_quality": 0.15,  # TTM ROIC above this suggests durable advantage
+    "net_margin_floor": 0.10,  # minimum acceptable profitability
     "margin_stability_range": 0.15,  # max 5yr spread (15 percentage points)
     "fcf_conversion_floor": 0.80,  # FCF / net income
-    "debt_equity_healthy": 1.0,    # below this is conservative
+    "debt_equity_healthy": 1.0,  # below this is conservative
     "debt_equity_concerning": 2.0,  # above this is a red flag
-    "rule_of_40": 40.0,            # growth% + FCF margin%
+    "rule_of_40": 40.0,  # growth% + FCF margin%
 }
 
 
@@ -55,7 +55,7 @@ class Check:
     """One criterion, its verdict, and the numbers behind it."""
 
     name: str
-    passed: bool | None      # None means "could not evaluate"
+    passed: bool | None  # None means "could not evaluate"
     value: float | None
     threshold: float | None
     detail: str
@@ -159,7 +159,10 @@ def check_margin_stability(margins: list[float | None]) -> Check:
     values = [m for m in margins if m is not None]
     if len(values) < 3:
         return Check(
-            "Margin stability", None, None, t,
+            "Margin stability",
+            None,
+            None,
+            t,
             f"Only {len(values)} periods available; need 3+",
         )
     spread = max(values) - min(values)
@@ -183,7 +186,10 @@ def check_fcf_quality(fcf: float | None, net_income: float | None) -> Check:
         return Check("FCF conversion", None, None, t, "FCF or net income unavailable")
     if net_income <= 0:
         return Check(
-            "FCF conversion", None, None, t,
+            "FCF conversion",
+            None,
+            None,
+            t,
             "Net income is not positive; conversion ratio is not meaningful",
         )
     ratio = fcf / net_income
@@ -304,7 +310,13 @@ def financial_health_table(current: dict, prior: dict) -> dict:
     Direction matters more than level: cash falling while debt rises is a
     different story from the same balance sheet moving the other way.
     """
-    fields = ["cash", "short_term_investments", "total_debt", "free_cash_flow", "shareholders_equity"]
+    fields = [
+        "cash",
+        "short_term_investments",
+        "total_debt",
+        "free_cash_flow",
+        "shareholders_equity",
+    ]
     table = {}
     for f in fields:
         now = current.get(f)

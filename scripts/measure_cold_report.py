@@ -50,8 +50,9 @@ def make_cold(ticker: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ticker", nargs="?", default="NVDA")
-    parser.add_argument("--keep", action="store_true",
-                        help="do not clear the ticker first (measures a warm path)")
+    parser.add_argument(
+        "--keep", action="store_true", help="do not clear the ticker first (measures a warm path)"
+    )
     args = parser.parse_args()
 
     logging.getLogger().setLevel(logging.INFO)
@@ -70,8 +71,10 @@ def main() -> int:
     print(f"=== {ticker}: uncached /report ===")
     print(f"  HTTP {resp.status_code}    wall clock {wall:.2f}s")
     if narrative:
-        print(f"  narrative present: verdict={narrative.get('verdict')} "
-              f"grounding={narrative.get('grounding_rate')}")
+        print(
+            f"  narrative present: verdict={narrative.get('verdict')} "
+            f"grounding={narrative.get('grounding_rate')}"
+        )
     else:
         print("  narrative ABSENT - report degraded to computed figures only")
     # The stage breakdown itself is logged by timing.track at INFO.

@@ -62,7 +62,7 @@ NBSP_SPAN = "PART I Item 1A Business model competition"
 # has curly quotes around NOPAs, the model wrote straight ones. This exact
 # string was reported as fabricated and dropped the grounding rate to 94%.
 TYPOGRAPHIC_REAL = (
-    'We are currently under IRS audit for prior tax years and have received '
+    "We are currently under IRS audit for prior tax years and have received "
     'Notices of Proposed Adjustment ("NOPAs") from the IRS for the tax years '
     "2004 to 2013. The primary issues in the NOPAs relate to intercompany "
     "transfer pricing."
@@ -119,8 +119,7 @@ CASES = [
             "curly quotes around NOPAs; the model typed straight ones. A real "
             "passage was called fabricated, for 94% grounding."
         ),
-        "reply": _reply(True, "The filing quantifies the IRS dispute.",
-                        [TYPOGRAPHIC_REAL]),
+        "reply": _reply(True, "The filing quantifies the IRS dispute.", [TYPOGRAPHIC_REAL]),
         "expect": {"checks": [True], "grounding_rate": 1.0, "addressed": True},
     },
     {
@@ -131,9 +130,9 @@ CASES = [
             "and that must not read as invention."
         ),
         "reply": _reply(
-            True, "Regulation affects the business.",
-            ["rulemakings could adversely affect Microsoft's business, strategy, "
-             "and operations"],
+            True,
+            "Regulation affects the business.",
+            ["rulemakings could adversely affect Microsoft's business, strategy, and operations"],
         ),
         "expect": {"checks": [True], "grounding_rate": 1.0, "addressed": True},
     },
@@ -144,9 +143,9 @@ CASES = [
             "wrong content, must still fail."
         ),
         "reply": _reply(
-            True, "Regulation helps the business.",
-            ["rulemakings could favourably advance Microsoft's business, "
-             "strategy, and operations"],
+            True,
+            "Regulation helps the business.",
+            ["rulemakings could favourably advance Microsoft's business, strategy, and operations"],
         ),
         "expect": {"checks": [False], "grounding_rate": 0.0, "addressed": True},
     },
@@ -190,11 +189,15 @@ CASES = [
         "id": "one_real_three_fake",
         "why": "Arithmetic check on an uneven split.",
         "reply": _reply(
-            True, "Mostly invented.",
+            True,
+            "Mostly invented.",
             [VERBATIM, FABRICATED, TRUE_BUT_ABSENT, "Another invention entirely."],
         ),
-        "expect": {"checks": [True, False, False, False], "grounding_rate": 0.25,
-                   "addressed": True},
+        "expect": {
+            "checks": [True, False, False, False],
+            "grounding_rate": 0.25,
+            "addressed": True,
+        },
     },
     {
         "id": "abstention",
@@ -224,8 +227,7 @@ CASES = [
             "never to a silent success with zero quotes."
         ),
         "reply": "I'm afraid I can't answer that.",
-        "expect": {"checks": [], "grounding_rate": None, "addressed": None,
-                   "error": True},
+        "expect": {"checks": [], "grounding_rate": None, "addressed": None, "error": True},
     },
 ]
 
@@ -252,23 +254,16 @@ class _StubClient:
 
 def run_case(case: dict, source: str) -> dict:
     """Replay one recorded reply through the real answer_question path."""
-    result = answer_question("replayed question", source,
-                             client=_StubClient(case["reply"]))
+    result = answer_question("replayed question", source, client=_StubClient(case["reply"]))
     expect = case["expect"]
 
     problems = []
     if result["quote_checks"] != expect["checks"]:
-        problems.append(
-            f"quote_checks {result['quote_checks']} != {expect['checks']}"
-        )
+        problems.append(f"quote_checks {result['quote_checks']} != {expect['checks']}")
     if result["grounding_rate"] != expect["grounding_rate"]:
-        problems.append(
-            f"grounding_rate {result['grounding_rate']} != {expect['grounding_rate']}"
-        )
+        problems.append(f"grounding_rate {result['grounding_rate']} != {expect['grounding_rate']}")
     if result["addressed"] != expect["addressed"]:
-        problems.append(
-            f"addressed {result['addressed']} != {expect['addressed']}"
-        )
+        problems.append(f"addressed {result['addressed']} != {expect['addressed']}")
     if expect.get("error") and "error" not in result:
         problems.append("expected an error key, got none")
 

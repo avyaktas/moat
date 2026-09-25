@@ -64,8 +64,10 @@ def test_extract_section_end_before_start_returns_none():
     text = "ITEM 1B comes first ... ITEM 1A RISK FACTORS with nothing after"
     assert extract_section(text, "ITEM 1A RISK FACTORS", "ITEM 1B") is None
 
+
 def test_loose_matches_real_msft_heading():
     assert _loose("ITEM 1A RISK FACTORS").search("ITEM 1A. RIS\nK FACTORS") is not None
+
 
 # --- the filing text cache ---
 #
@@ -81,12 +83,16 @@ def setup_function():
 
 
 def _stub_filing(monkeypatch, fetches: list, accession: str = "0001-23-456789"):
-    monkeypatch.setattr(filings, "find_latest_10k", lambda cik: {
-        "url": "https://example.com/10k.htm",
-        "filing_date": "2025-07-30",
-        "report_date": "2025-06-30",
-        "accession": accession,
-    })
+    monkeypatch.setattr(
+        filings,
+        "find_latest_10k",
+        lambda cik: {
+            "url": "https://example.com/10k.htm",
+            "filing_date": "2025-07-30",
+            "report_date": "2025-06-30",
+            "accession": accession,
+        },
+    )
 
     def _fetch(url):
         fetches.append(url)
@@ -121,10 +127,16 @@ def test_a_new_filing_is_a_cache_miss(monkeypatch):
 def test_missing_section_is_cached_too(monkeypatch):
     """Re-downloading 8MB to rediscover a non-standard heading helps nobody."""
     fetches = []
-    monkeypatch.setattr(filings, "find_latest_10k", lambda cik: {
-        "url": "https://example.com/10k.htm", "filing_date": "2025-07-30",
-        "report_date": "2025-06-30", "accession": "acc-1",
-    })
+    monkeypatch.setattr(
+        filings,
+        "find_latest_10k",
+        lambda cik: {
+            "url": "https://example.com/10k.htm",
+            "filing_date": "2025-07-30",
+            "report_date": "2025-06-30",
+            "accession": "acc-1",
+        },
+    )
 
     def _fetch(url):
         fetches.append(url)
@@ -144,13 +156,21 @@ def test_latest_10k_lookup_is_cached(monkeypatch):
         calls.append(url)
 
         class _R:
-            def raise_for_status(self): pass
+            def raise_for_status(self):
+                pass
+
             def json(self):
-                return {"filings": {"recent": {
-                    "form": ["10-K"], "accessionNumber": ["0001-23-456789"],
-                    "primaryDocument": ["d.htm"], "filingDate": ["2025-07-30"],
-                    "reportDate": ["2025-06-30"],
-                }}}
+                return {
+                    "filings": {
+                        "recent": {
+                            "form": ["10-K"],
+                            "accessionNumber": ["0001-23-456789"],
+                            "primaryDocument": ["d.htm"],
+                            "filingDate": ["2025-07-30"],
+                            "reportDate": ["2025-06-30"],
+                        }
+                    }
+                }
 
         return _R()
 
@@ -167,13 +187,21 @@ def test_company_with_no_10k_is_cached_as_none(monkeypatch):
         calls.append(url)
 
         class _R:
-            def raise_for_status(self): pass
+            def raise_for_status(self):
+                pass
+
             def json(self):
-                return {"filings": {"recent": {
-                    "form": ["8-K"], "accessionNumber": ["x"],
-                    "primaryDocument": ["d.htm"], "filingDate": ["2025-07-30"],
-                    "reportDate": ["2025-06-30"],
-                }}}
+                return {
+                    "filings": {
+                        "recent": {
+                            "form": ["8-K"],
+                            "accessionNumber": ["x"],
+                            "primaryDocument": ["d.htm"],
+                            "filingDate": ["2025-07-30"],
+                            "reportDate": ["2025-06-30"],
+                        }
+                    }
+                }
 
         return _R()
 

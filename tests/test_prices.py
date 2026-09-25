@@ -46,7 +46,7 @@ def test_failure_is_not_cached():
     def flaky(ticker):
         calls.append(ticker)
         if len(calls) == 1:
-            return None          # transient failure
+            return None  # transient failure
         return _ok(ticker)
 
     prices._fetch_price = flaky
@@ -72,6 +72,7 @@ def test_raised_exception_is_not_cached():
 
 def test_exception_does_not_propagate():
     """A price outage degrades the report; it must never take it down."""
+
     def boom(ticker):
         raise RuntimeError("network on fire")
 

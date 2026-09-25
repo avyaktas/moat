@@ -16,6 +16,7 @@ from moat.report import _growth, _row_to_dict, build_report_data
 @dataclass
 class FakeRow:
     """Stands in for a Financials ORM row."""
+
     period_end: date
     revenue: float | None = None
     net_income: float | None = None
@@ -26,8 +27,9 @@ class FakeRow:
     short_term_investments: float | None = None
 
 
-def make_rows(n: int = 8, revenue: float = 100.0, income: float = 30.0,
-              fcf: float = 25.0) -> list[FakeRow]:
+def make_rows(
+    n: int = 8, revenue: float = 100.0, income: float = 30.0, fcf: float = 25.0
+) -> list[FakeRow]:
     """n quarters, newest first, with steady figures."""
     return [
         FakeRow(
@@ -46,6 +48,7 @@ def make_rows(n: int = 8, revenue: float = 100.0, income: float = 30.0,
 
 # --- growth helper ---
 
+
 def test_growth_computes_rate():
     assert _growth(110.0, 100.0) == 0.10
 
@@ -62,6 +65,7 @@ def test_growth_none_on_nonpositive_base():
 
 # --- row conversion ---
 
+
 def test_row_to_dict_extracts_fields():
     row = FakeRow(period_end=date(2026, 3, 31), revenue=100.0, cash=32.0)
     d = _row_to_dict(row)
@@ -75,6 +79,7 @@ def test_row_to_dict_handles_none():
 
 # --- report assembly ---
 
+
 def test_report_errors_without_data():
     assert "error" in build_report_data([], None)
 
@@ -82,8 +87,8 @@ def test_report_errors_without_data():
 def test_report_computes_ttm():
     rows = make_rows(8)
     data = build_report_data(rows, None)
-    assert data["ttm"]["revenue"] == 400.0       # 4 quarters x 100
-    assert data["ttm"]["net_income"] == 120.0    # 4 x 30
+    assert data["ttm"]["revenue"] == 400.0  # 4 quarters x 100
+    assert data["ttm"]["net_income"] == 120.0  # 4 x 30
     assert data["ttm"]["free_cash_flow"] == 100.0
 
 
@@ -116,9 +121,7 @@ def test_report_valuation_needs_price():
     without = build_report_data(make_rows(8), None)
     assert without["scorecard"]["valuation"]["p_fcf"] is None
 
-    with_price = build_report_data(
-        make_rows(8), {"price": 50.0, "market_cap": 1000.0}
-    )
+    with_price = build_report_data(make_rows(8), {"price": 50.0, "market_cap": 1000.0})
     assert with_price["scorecard"]["valuation"]["p_fcf"] == 10.0  # 1000 / 100
 
 
@@ -141,6 +144,7 @@ def test_report_partial_data_yields_mixed_statuses():
     statuses = [c["status"] for c in data["scorecard"]["checks"]]
     assert "UNKNOWN" in statuses
     assert "PASS" in statuses or "FAIL" in statuses
+
 
 # --- what the model actually receives ---
 #
@@ -207,8 +211,7 @@ def _synthesis_payload() -> str:
     """Run synthesize against a capturing client and return the prompt text."""
     data = build_report_data(_decimal_rows(), {"market_cap": Decimal("2500")})
     client = _CapturingClient('{"verdict": "WATCH-CASE", "risks": []}')
-    report_module.synthesize(data, "ITEM 1A. RISK FACTORS text", "Test Co",
-                             client=client)
+    report_module.synthesize(data, "ITEM 1A. RISK FACTORS text", "Test Co", client=client)
     return client.captured
 
 
@@ -218,8 +221,9 @@ def test_synthesis_payload_has_no_stringified_numbers():
     import re
 
     payload = _synthesis_payload()
-    figures = re.search(r"<computed_figures>\n(.*)\n</computed_figures>",
-                        payload, re.DOTALL).group(1)
+    figures = re.search(r"<computed_figures>\n(.*)\n</computed_figures>", payload, re.DOTALL).group(
+        1
+    )
     parsed = _json.loads(figures)
 
     def walk(node, path="figures"):
@@ -244,8 +248,9 @@ def test_synthesis_payload_keeps_full_precision_as_floats():
     import re
 
     payload = _synthesis_payload()
-    figures = re.search(r"<computed_figures>\n(.*)\n</computed_figures>",
-                        payload, re.DOTALL).group(1)
+    figures = re.search(r"<computed_figures>\n(.*)\n</computed_figures>", payload, re.DOTALL).group(
+        1
+    )
     parsed = _json.loads(figures)
 
     assert isinstance(parsed["scorecard"]["valuation"]["market_cap"], (int, float))
@@ -261,13 +266,12 @@ def test_synthesis_payload_preserves_nulls_as_json_null():
     import json as _json
     import re
 
-    data = build_report_data(
-        [FakeRow(period_end=date(2026, 3, 31)) for _ in range(8)], None
-    )
+    data = build_report_data([FakeRow(period_end=date(2026, 3, 31)) for _ in range(8)], None)
     client = _CapturingClient('{"verdict": "WATCH-CASE", "risks": []}')
     report_module.synthesize(data, "filing text", "Test Co", client=client)
-    figures = re.search(r"<computed_figures>\n(.*)\n</computed_figures>",
-                        client.captured, re.DOTALL).group(1)
+    figures = re.search(
+        r"<computed_figures>\n(.*)\n</computed_figures>", client.captured, re.DOTALL
+    ).group(1)
     parsed = _json.loads(figures)
 
     assert parsed["ttm"]["revenue"] is None
@@ -282,13 +286,13 @@ def test_synthesis_payload_preserves_nulls_as_json_null():
 # NO VERDICT for the full 7-day TTL. Failure has to be a raise, so there is
 # exactly one way to fail and a caller cannot mistake it for a result.
 
+
 def test_synthesize_raises_on_unparseable_reply():
     from moat.report import SynthesisError
 
     client = _CapturingClient("I'm afraid I can't help with that.")
     try:
-        report_module.synthesize({"ttm": {}}, "filing text", "Test Co",
-                                 client=client)
+        report_module.synthesize({"ttm": {}}, "filing text", "Test Co", client=client)
     except SynthesisError as e:
         assert "raw" in str(e) or client.captured is not None
     else:
@@ -302,8 +306,7 @@ def test_synthesize_error_is_not_a_dict_with_error_key():
     client = _CapturingClient("not json at all")
     result = None
     try:
-        result = report_module.synthesize({"ttm": {}}, "filing", "Co",
-                                          client=client)
+        result = report_module.synthesize({"ttm": {}}, "filing", "Co", client=client)
     except SynthesisError:
         pass
     assert result is None, (
@@ -328,13 +331,18 @@ def test_synthesize_keeps_the_raw_reply_for_debugging():
 # is dropped from the response. So a model that drifts from what
 # build_report_data returns is silent data loss, not just stale docs.
 
+
 def test_real_report_data_satisfies_the_declared_response_model():
     from moat.schemas import ReportDataOut
 
-    data = build_report_data(_decimal_rows(8), {
-        "price": Decimal("512.30"), "market_cap": Decimal("3700000000000"),
-        "shares_outstanding": Decimal("7430000000"),
-    })
+    data = build_report_data(
+        _decimal_rows(8),
+        {
+            "price": Decimal("512.30"),
+            "market_cap": Decimal("3700000000000"),
+            "shares_outstanding": Decimal("7430000000"),
+        },
+    )
     validated = ReportDataOut.model_validate(data)
 
     # Nothing silently dropped on the way through.
@@ -379,10 +387,7 @@ def test_synthesize_parses_a_raw_control_character():
     and json.loads rejects that by default - discarding an entire usable
     synthesis over a character with no semantic content.
     """
-    reply = (
-        '{"verdict": "WATCH-CASE", "reasoning": "Line one' + chr(10) + 'line two",'
-        ' "risks": []}'
-    )
+    reply = '{"verdict": "WATCH-CASE", "reasoning": "Line one' + chr(10) + 'line two", "risks": []}'
     client = _CapturingClient(reply)
     result = report_module.synthesize({"ttm": {}}, "filing text", "Co", client=client)
     assert result["verdict"] == "WATCH-CASE"
@@ -408,6 +413,7 @@ def test_synthesize_still_raises_on_genuinely_broken_json():
 # push it over, the response is cut mid-string, json.loads reports
 # "Unterminated string", and the retry produces the same truncation - two full
 # 32-second calls for no verdict at all.
+
 
 class _StopReasonClient:
     """Stands in for Anthropic, reporting a chosen stop_reason."""
@@ -436,8 +442,9 @@ class _StopReasonClient:
 def test_truncated_response_raises_truncation_error():
     from moat.report import SynthesisTruncated
 
-    client = _StopReasonClient('{"verdict": "WATCH-CASE", "risks": [{"quote": "unte',
-                               stop_reason="max_tokens")
+    client = _StopReasonClient(
+        '{"verdict": "WATCH-CASE", "risks": [{"quote": "unte', stop_reason="max_tokens"
+    )
     try:
         report_module.synthesize({"ttm": {}}, "filing", "Co", client=client)
     except SynthesisTruncated as exc:
@@ -454,8 +461,7 @@ def test_truncation_error_is_a_synthesis_error():
 
 
 def test_complete_response_is_unaffected_by_the_stop_reason_check():
-    client = _StopReasonClient('{"verdict": "BUY-CASE", "risks": []}',
-                               stop_reason="end_turn")
+    client = _StopReasonClient('{"verdict": "BUY-CASE", "risks": []}', stop_reason="end_turn")
     result = report_module.synthesize({"ttm": {}}, "filing", "Co", client=client)
     assert result["verdict"] == "BUY-CASE"
 

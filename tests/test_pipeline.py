@@ -18,6 +18,7 @@ def _slow(seconds, value):
     def fn(ticker):
         time.sleep(seconds)
         return value
+
     return fn
 
 
@@ -25,7 +26,8 @@ def test_fetches_run_concurrently():
     """The whole point. Three 0.2s fetches in series would be 0.6s."""
     started = time.perf_counter()
     pipeline.prefetch(
-        "MSFT", need_financials=True,
+        "MSFT",
+        need_financials=True,
         fetch_financials=_slow(0.2, ("789019", "Microsoft", {"net_income": {}})),
         fetch_filing=_slow(0.2, {"text": "t", "url": "u", "report_date": "d"}),
         fetch_price=_slow(0.2, {"price": 1.0}),
@@ -36,7 +38,8 @@ def test_fetches_run_concurrently():
 
 def test_all_three_results_are_returned():
     result = pipeline.prefetch(
-        "MSFT", need_financials=True,
+        "MSFT",
+        need_financials=True,
         fetch_financials=lambda t: ("789019", "Microsoft", {"net_income": {}}),
         fetch_filing=lambda t: {"text": "t", "url": "u", "report_date": "d"},
         fetch_price=lambda t: {"price": 1.0},
@@ -50,7 +53,8 @@ def test_all_three_results_are_returned():
 def test_financials_are_skipped_when_already_ingested():
     called = []
     result = pipeline.prefetch(
-        "MSFT", need_financials=False,
+        "MSFT",
+        need_financials=False,
         fetch_financials=lambda t: called.append(t),
         fetch_filing=lambda t: {"text": "t"},
         fetch_price=lambda t: None,
@@ -63,7 +67,8 @@ def test_financials_are_skipped_when_already_ingested():
 def test_a_failing_filing_does_not_sink_the_report():
     """The computed figures do not come from the filing."""
     result = pipeline.prefetch(
-        "MSFT", need_financials=False,
+        "MSFT",
+        need_financials=False,
         fetch_financials=lambda t: None,
         fetch_filing=lambda t: (_ for _ in ()).throw(RuntimeError("EDGAR down")),
         fetch_price=lambda t: {"price": 1.0},
@@ -75,7 +80,8 @@ def test_a_failing_filing_does_not_sink_the_report():
 
 def test_a_failing_price_does_not_sink_the_report():
     result = pipeline.prefetch(
-        "MSFT", need_financials=False,
+        "MSFT",
+        need_financials=False,
         fetch_financials=lambda t: None,
         fetch_filing=lambda t: {"text": "t"},
         fetch_price=lambda t: (_ for _ in ()).throw(RuntimeError("yfinance down")),
@@ -92,9 +98,9 @@ def test_a_failing_financials_fetch_is_re_raised():
     """
     with pytest.raises(ValueError, match="Unknown ticker"):
         pipeline.prefetch(
-            "ZZZZ", need_financials=True,
-            fetch_financials=lambda t: (_ for _ in ()).throw(
-                ValueError("Unknown ticker: ZZZZ")),
+            "ZZZZ",
+            need_financials=True,
+            fetch_financials=lambda t: (_ for _ in ()).throw(ValueError("Unknown ticker: ZZZZ")),
             fetch_filing=lambda t: None,
             fetch_price=lambda t: None,
         )
@@ -105,7 +111,8 @@ def test_the_other_fetches_still_complete_before_the_raise():
     done = []
     with pytest.raises(ValueError):
         pipeline.prefetch(
-            "ZZZZ", need_financials=True,
+            "ZZZZ",
+            need_financials=True,
             fetch_financials=lambda t: (_ for _ in ()).throw(ValueError("nope")),
             fetch_filing=lambda t: done.append("filing"),
             fetch_price=lambda t: done.append("price"),
@@ -119,13 +126,15 @@ def test_stages_inside_workers_are_recorded():
     If bind_context were dropped, the breakdown would silently omit every
     parallelised stage and the fetches would look instantaneous.
     """
+
     def fetch_with_stage(ticker):
         with timing.stage("inner.work"):
             return {"text": "t"}
 
     with timing.track("t") as t:
         pipeline.prefetch(
-            "MSFT", need_financials=False,
+            "MSFT",
+            need_financials=False,
             fetch_financials=lambda x: None,
             fetch_filing=fetch_with_stage,
             fetch_price=lambda x: None,
@@ -136,7 +145,8 @@ def test_stages_inside_workers_are_recorded():
 def test_workers_are_named_for_debugging():
     seen = []
     pipeline.prefetch(
-        "MSFT", need_financials=False,
+        "MSFT",
+        need_financials=False,
         fetch_financials=lambda t: None,
         fetch_filing=lambda t: seen.append(threading.current_thread().name),
         fetch_price=lambda t: None,

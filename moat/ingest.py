@@ -3,34 +3,34 @@ from the SEC and writes it into the database.
 
 1. FETCH (fetch_company_facts)
     Calls the SEC's EDGAR API for a company, identified by its CIK.
-    The CIK is the SEC's company ID, 0-padded to 10 digits. 
+    The CIK is the SEC's company ID, 0-padded to 10 digits.
     Then it returns a JSON containing every numeric fact the comapany has
-    ever filed (revenue, income, assets, etc.) across all years and filings. 
-    no API key needed but the SEC needs my name and email. 
-    raise_for_status() makes a bad HTTP response fail loudly. 
-    
+    ever filed (revenue, income, assets, etc.) across all years and filings.
+    no API key needed but the SEC needs my name and email.
+    raise_for_status() makes a bad HTTP response fail loudly.
+
 2. EXTRACT (extract_quarterly)
     The raw JSON has a GAAP tag for each concept and the same period
     can appear many times, so keep only the entries that are filed
     quarterly. It uses the SEC's canonical-period marker which filter
     the annual duplicates. The dates arrive as strings and are then parsed into
-    python date objects. 
+    python date objects.
     Output per tag: {period_end_date: value}
     {} if gaps in data
-    
+
 3. TRANSFORM (part of ingest_company)
-    TAGS dict maps col names to SEC's GAAP tag names. 
-    Two metric need to be derived: 
+    TAGS dict maps col names to SEC's GAAP tag names.
+    Two metric need to be derived:
         - free_cash_flow: operating cash flow - capex
         - total_debt: current + noncurrent long term debt
     Take union of all periods seen across all tage, so a period missing
     some metrics still gets a row with honest NULLs.
-    
+
 4. LOAD (part of ingest_company)
-    Looks up company by ticker, creating it if new. 
-    For each period: skip if a row for (company, period) already exists. 
+    Looks up company by ticker, creating it if new.
+    For each period: skip if a row for (company, period) already exists.
     Makes the script idempotent: safe to run repeatedly; reruns write 0 new rows.
-    
+
 """
 
 import logging
@@ -74,11 +74,13 @@ SNAPSHOT_TAGS = {
     "short_term_investments": ["ShortTermInvestments", "MarketableSecuritiesCurrent"],
 }
 
+
 def fetch_company_facts(cik: str) -> dict:
     url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:>010}.json"
     response = requests.get(url, headers=HEADERS, timeout=30)
     response.raise_for_status()
     return response.json()
+
 
 # REPL discovery
 def extract_quarterly(facts: dict, tags: list[str]) -> dict[date, float]:
@@ -94,6 +96,7 @@ def extract_quarterly(facts: dict, tags: list[str]) -> dict[date, float]:
             if "frame" in e and "Q" in e.get("frame", ""):
                 out.setdefault(date.fromisoformat(e["end"]), e["val"])
     return out
+
 
 def extract_annual(facts: dict, tags: list[str]) -> dict[date, tuple[date, float]]:
     """Return {period_end: (period_start, value)} for annual (~365-day) entries.
@@ -117,13 +120,14 @@ def extract_annual(facts: dict, tags: list[str]) -> dict[date, tuple[date, float
                 out.setdefault(end, (start, e["val"]))
     return out
 
+
 # Duration windows, in days, for reasoning about reporting periods.
 # Fiscal quarters run ~13 weeks (91 days), occasionally 14 (98) in 53-week
 # years; the gap up to a half-year (~180) is wide, so these windows are
 # unambiguous.
 _QUARTER_MIN_DAYS = 80
 _QUARTER_MAX_DAYS = 100
-_INTERIM_MAX_DAYS = 300   # Q1-Q3 spans; the annual (~365) is left to derive_q4
+_INTERIM_MAX_DAYS = 300  # Q1-Q3 spans; the annual (~365) is left to derive_q4
 
 
 def extract_ytd(facts: dict, tags: list[str]) -> list[tuple[date, date, float]]:
@@ -186,15 +190,18 @@ def derive_interim_quarters(
                 # First member is a standalone quarter only if it spans ~one.
                 if _QUARTER_MIN_DAYS <= days <= _QUARTER_MAX_DAYS:
                     out.setdefault(end, val)
-            elif (days <= _INTERIM_MAX_DAYS
-                  and _QUARTER_MIN_DAYS <= days - prev_days <= _QUARTER_MAX_DAYS):
+            elif (
+                days <= _INTERIM_MAX_DAYS
+                and _QUARTER_MIN_DAYS <= days - prev_days <= _QUARTER_MAX_DAYS
+            ):
                 out.setdefault(end, val - prev_val)
             prev_val, prev_days = val, days
     return out
 
 
-def derive_q4(quarterly: dict[date, float],
-              annual: dict[date, tuple[date, float]]) -> dict[date, float]:
+def derive_q4(
+    quarterly: dict[date, float], annual: dict[date, tuple[date, float]]
+) -> dict[date, float]:
     """Fill in missing Q4 values: Q4 = FY - (Q1 + Q2 + Q3).
 
     Companies don't file a standalone Q4 10-Q; the fourth quarter lives
@@ -212,12 +219,14 @@ def derive_q4(quarterly: dict[date, float],
             out[fy_end] = fy_val - sum(covered)
     return out
 
+
 _ticker_cache: dict[str, tuple[str, str]] | None = None
+
 
 def get_cik(ticker: str) -> tuple[str, str]:
     """Look up (CIK, name) for a ticker from the SEC's mapping file.
-    
-    The ~10-K entry file is fetched once per process and cached in memory - 
+
+    The ~10-K entry file is fetched once per process and cached in memory -
     it changes rarely and refetching it every ingest would hammer the SEC.
     ValueErrors raised for tickers that are not in the file."""
 
@@ -225,17 +234,18 @@ def get_cik(ticker: str) -> tuple[str, str]:
     if _ticker_cache is None:
         resp = requests.get(
             "https://www.sec.gov/files/company_tickers.json",
-            headers=HEADERS, timeout=30,
+            headers=HEADERS,
+            timeout=30,
         )
         resp.raise_for_status()
         _ticker_cache = {
-            v["ticker"].upper(): (str(v["cik_str"]), v["title"])
-            for v in resp.json().values()
+            v["ticker"].upper(): (str(v["cik_str"]), v["title"]) for v in resp.json().values()
         }
     ticker = ticker.upper()
     if ticker not in _ticker_cache:
         raise ValueError(f"Unknown ticker: {ticker}")
     return _ticker_cache[ticker]
+
 
 def fetch_financials(ticker: str) -> tuple[str, str, dict]:
     """Fetch and extract one company's financials. Network and CPU only.
@@ -299,8 +309,7 @@ def _row_values(company_id: int, period, series: dict) -> dict:
     }
 
 
-def store_financials(ticker: str, name: str, series: dict,
-                     sector: str | None = None) -> int:
+def store_financials(ticker: str, name: str, series: dict, sector: str | None = None) -> int:
     """Upsert a company and its quarterly financials. Database only.
 
     Returns the number of periods written.
@@ -330,12 +339,10 @@ def store_financials(ticker: str, name: str, series: dict,
                 # foreign key violation naming a company that never existed.
                 db.rollback()
                 company = db.query(Company).filter(Company.ticker == ticker).one()
-                logger.info("company %s was created concurrently; using id %s",
-                            ticker, company.id)
+                logger.info("company %s was created concurrently; using id %s", ticker, company.id)
 
         with timing.stage("db.financials_write"):
-            rows = [_row_values(company.id, period, series)
-                    for period in sorted(all_periods)]
+            rows = [_row_values(company.id, period, series) for period in sorted(all_periods)]
             if rows:
                 # One multi-row upsert rather than one statement per period.
                 # The loop this replaces issued 77 separate round trips for a
@@ -350,8 +357,7 @@ def store_financials(ticker: str, name: str, series: dict,
                 # behaviour that a restatement dropping a figure nulls the
                 # column instead of leaving the previous value behind.
                 stmt = pg_insert(Financials).values(rows)
-                updatable = [c for c in rows[0]
-                             if c not in ("company_id", "period_end")]
+                updatable = [c for c in rows[0] if c not in ("company_id", "period_end")]
                 stmt = stmt.on_conflict_do_update(
                     constraint="uq_company_period",
                     set_={c: getattr(stmt.excluded, c) for c in updatable},
@@ -384,7 +390,7 @@ def ingest_company(ticker: str, sector: str | None = None) -> int:
 
 if __name__ == "__main__":
     import sys
+
     ticker = sys.argv[1] if len(sys.argv) > 1 else "MSFT"
     count = ingest_company(ticker)
     print(f"Processed {count} periods for {ticker}")
-
