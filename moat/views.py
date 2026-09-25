@@ -1110,7 +1110,7 @@ def render_landing() -> str:
       .wrap { min-height: 100vh; display: flex; flex-direction: column; }
       .land-main {
         flex: 1; width: 100%; max-width: 560px; margin: 0 auto;
-        padding: 18vh var(--s5) var(--s7); 
+        padding: 18vh var(--s5) var(--s7);
       }
       .brand {
         display: flex; align-items: center; gap: var(--s3);

@@ -17,6 +17,10 @@ select = [
 ]
 ignore = [
     "E501",  # line length is enforced by the formatter, not the linter
+    # W291/W293 are deliberately not selected. Every occurrence in this
+    # codebase is inside a string literal - six in analysis.SYSTEM_PROMPT and
+    # one in a CSS block - and "fixing" the prompt would edit the text sent to
+    # the model, which is a behaviour change wearing a lint fix's clothes.
     # Depends(get_db) and Query(...) in a default argument is FastAPI's
     # documented idiom, not the mutable-default-argument bug B008 targets.
     "B008",
