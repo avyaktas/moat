@@ -98,8 +98,8 @@ class Report(Base):
     )
 
 
-# Deferred: vector retrieval for free-form Q&A. The sketch lives in
-# chunking.py and embeddings.py; the model would add a chunks table with a
-# Vector(384) embedding column and a unique (company_id, chunk_index). It
-# needs `pip install sentence-transformers pgvector`, which requirements.txt
-# no longer installs - see the note there.
+# Deferred: vector retrieval for free-form Q&A would add a chunks table with a
+# Vector(384) embedding column and a unique (company_id, chunk_index), plus
+# `pip install sentence-transformers pgvector`. Not built - the filing's Item
+# 1A is sliced out by structure instead, which is cheaper and exact. See
+# filings.py for why that works.

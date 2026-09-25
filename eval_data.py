@@ -5,7 +5,7 @@ date 2025-06-30) by keyword search. Answer keys reflect what the document
 actually contains, not what is true about Microsoft in general.
 
 Fields:
-    id             matches eval_questions.md
+    id             stable identifier, referenced in commit messages
     question       the prompt sent to the analyzer
     category       "answerable" | "absent" | "specific"
     should_abstain True if the correct behavior is "not addressed"
