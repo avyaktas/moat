@@ -9,12 +9,8 @@ __pycache__/
 # Tests and their fixtures are not needed to serve traffic. The 69KB eval
 # fixture in particular exists for the grounding harness, which is run from a
 # checkout rather than from the image.
-test_*.py
-conftest.py
-grounding_replay.py
-evaluate.py
-eval_data.py
-fixtures/
+tests/
+evals/
 scripts/
 
 # Personal notes, kept local

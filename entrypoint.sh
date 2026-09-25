@@ -17,4 +17,4 @@ alembic upgrade head
 
 echo "Starting server on port ${PORT:-8000}..."
 # Railway assigns a port at runtime; default to 8000 for local use.
-exec uvicorn main:app --host 0.0.0.0 --port "${PORT:-8000}"
+exec uvicorn moat.main:app --host 0.0.0.0 --port "${PORT:-8000}"

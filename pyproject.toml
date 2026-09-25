@@ -2,9 +2,9 @@
 line-length = 100
 target-version = "py312"
 
-# Not application code: alembic's env.py and its generated migrations follow
-# alembic's own conventions, and rewriting them to match ours gains nothing.
-exclude = ["alembic/versions", ".venv"]
+# Not application code: alembic generates these and they follow its
+# conventions, not ours.
+exclude = ["migrations/versions", ".venv"]
 
 [tool.ruff.lint]
 select = [
@@ -25,12 +25,13 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Tests deliberately import inside functions to keep monkeypatch targets
 # unambiguous and to assert import-time behaviour.
-"test_*.py" = ["E402"]
-"conftest.py" = ["E402"]
+"tests/*.py" = ["E402"]
 # alembic's env.py imports after the sys.path setup those imports require.
-"alembic/env.py" = ["E402"]
+"migrations/env.py" = ["E402"]
 
 [tool.pytest.ini_options]
-# Without this, pytest walks scripts/ and the virtualenv looking for tests.
-testpaths = ["."]
-norecursedirs = [".venv", "alembic", "scripts", "fixtures", ".git"]
+# Tests live in one place, so pytest no longer has to be told where not
+# to look. pythonpath puts the repo root on sys.path so `from moat.main
+# import app` resolves without installing the package.
+testpaths = ["tests"]
+pythonpath = ["."]

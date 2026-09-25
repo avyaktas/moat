@@ -19,14 +19,17 @@ import argparse
 import logging
 import sys
 import time
+from pathlib import Path
 
-sys.path.insert(0, ".")
+# Relative to this file, not to the working directory, so it runs
+# from anywhere.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from database import SessionLocal  # noqa: E402
-from main import app  # noqa: E402
-from models import Company, Financials, Report  # noqa: E402
+from moat.database import SessionLocal  # noqa: E402
+from moat.main import app  # noqa: E402
+from moat.models import Company, Financials, Report  # noqa: E402
 
 
 def make_cold(ticker: str) -> None:

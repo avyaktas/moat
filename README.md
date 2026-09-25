@@ -190,7 +190,7 @@ cp .env.example .env
 # sensible default.
 alembic upgrade head
 python ingest.py MSFT
-uvicorn main:app --reload
+uvicorn moat.main:app --reload
 ```
 
 Tests: `pytest` — 313 of them, in about 1.5 seconds. They use an isolated test
@@ -200,10 +200,10 @@ fails with a message saying which boundary to mock.
 
 Two evaluations, deliberately separate:
 
-- `python grounding_replay.py` — replays recorded model responses through the
+- `python -m evals.grounding_replay` — replays recorded model responses through the
   real grounding path against a pinned filing. Free, offline, deterministic,
   and runs in CI on every push. It measures the *verifier*.
-- `python evaluate.py` — asks the live model 24 questions about Microsoft's
+- `python -m evals.evaluate` — asks the live model 24 questions about Microsoft's
   FY2025 risk factors and grades abstention, grounding and hallucinations.
   Costs a few cents and needs a key. It measures the *model*. Exits non-zero
   if any quote fails to verify.
